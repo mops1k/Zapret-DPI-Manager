@@ -1098,10 +1098,24 @@ WantedBy=multi-user.target"
 
     echo "85"
     echo "# Запуск службы zapret..."
-    run_sudo systemctl daemon-reload
-    run_sudo systemctl start zapret.service
-    run_sudo systemctl enable zapret.service
-    echo "Служба запущена и включена"
+    # Запуск службы не должен прерывать установку: в свежем config.txt ещё нет
+    # выбранной стратегии, starter.sh не создаёт правила NFQUEUE и выходит с
+    # кодом 1, поэтому systemctl start возвращает ошибку. При set -e установка
+    # обрывалась здесь — до создания ярлыков и включения автозапуска.
+    if ! run_sudo systemctl daemon-reload; then
+        echo "# Внимание: systemctl daemon-reload завершился с ошибкой" >&2
+    fi
+    if run_sudo systemctl start zapret.service; then
+        echo "# Служба zapret запущена"
+    else
+        echo "# Внимание: служба zapret не запустилась на первом старте" >&2
+        echo "# Это нормально без выбранной стратегии: включите службу в Zapret DPI Manager." >&2
+    fi
+    if run_sudo systemctl enable zapret.service; then
+        echo "# Автозапуск службы zapret включён"
+    else
+        echo "# Внимание: не удалось включить автозапуск zapret.service" >&2
+    fi
 
     sleep 2
 
@@ -1122,10 +1136,24 @@ WantedBy=multi-user.target"
     # каталог при отсутствии создаётся (в Game Mode его может не быть).
     resolve_desktop_dir() {
         local candidate=""
-        if command -v xdg-user-dir >/dev/null 2>&1; then
-            candidate="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
+        # Под sudo xdg-user-dir берёт HOME root и возвращает ~root/Desktop,
+        # поэтому при запуске установщика от root спрашиваем реального пользователя.
+        local xdg_cmd="xdg-user-dir"
+        if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && command -v sudo >/dev/null 2>&1; then
+            xdg_cmd="sudo -u $SUDO_USER -H xdg-user-dir"
         fi
-        if [ -n "$candidate" ] && [ "$candidate" != "$CURRENT_HOME" ] && [ "$candidate" != "$CURRENT_HOME/" ]; then
+        if command -v xdg-user-dir >/dev/null 2>&1; then
+            candidate="$($xdg_cmd DESKTOP 2>/dev/null || true)"
+        fi
+        # Годится только каталог внутри домашнего каталога пользователя:
+        # иначе ярлык уедет в /root/Desktop или в чужой домашний каталог.
+        # Замыкающая «/» убирается, чтобы XDG_DESKTOP_DIR="$HOME/" не считался каталогом.
+        candidate="${candidate%/}"
+        case "$candidate" in
+            "$CURRENT_HOME"/*) ;;
+            *) candidate="" ;;
+        esac
+        if [ -n "$candidate" ]; then
             echo "$candidate"
             return 0
         fi
@@ -1184,11 +1212,16 @@ InitialPreference=9
             if shortcut_is_current "$DESKTOP_PATH"; then
                 echo "Ярлык уже актуален: $DESKTOP_PATH"
             else
-                echo "$DESKTOP_CONTENT" > "$DESKTOP_PATH"
+                echo "$DESKTOP_CONTENT" > "$DESKTOP_PATH" 2>/dev/null || true
                 echo "Ярлык создан: $DESKTOP_PATH"
             fi
-            chmod 755 "$DESKTOP_PATH"
+            chmod 755 "$DESKTOP_PATH" 2>/dev/null || true
             fix_shortcut_owner "$DESKTOP_PATH"
+            if [ -f "$DESKTOP_PATH" ]; then
+                echo "# Ярлык на рабочем столе: $DESKTOP_PATH" >&2
+            else
+                echo "Внимание: ярлык на рабочем столе не создан: $DESKTOP_PATH" >&2
+            fi
         else
             echo "Внимание: не удалось создать каталог рабочего стола: $DESKTOP_DIR" >&2
         fi
@@ -1200,11 +1233,16 @@ InitialPreference=9
         if shortcut_is_current "$APPS_PATH"; then
             echo "Ярлык в меню приложений уже актуален: $APPS_PATH"
         else
-            echo "$DESKTOP_CONTENT" > "$APPS_PATH"
+            echo "$DESKTOP_CONTENT" > "$APPS_PATH" 2>/dev/null || true
             echo "Ярлык в меню приложений создан: $APPS_PATH"
         fi
-        chmod 644 "$APPS_PATH"
+        chmod 644 "$APPS_PATH" 2>/dev/null || true
         fix_shortcut_owner "$APPS_PATH"
+        if [ -f "$APPS_PATH" ]; then
+            echo "# Ярлык в меню приложений: $APPS_PATH" >&2
+        else
+            echo "Внимание: ярлык в меню приложений не создан: $APPS_PATH" >&2
+        fi
         if command -v update-desktop-database &> /dev/null; then
             update-desktop-database "$APPS_DIR" 2>/dev/null || true
         fi
