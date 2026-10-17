@@ -16,7 +16,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STAND_DIR="$ROOT/tools/warp_scripts_test"
-CASES=(case1 case2 case3 case4 case5 case6 case7 caseA caseB caseC)
+CASES=(case1 case2 case3 case4 case5 case6 case7 caseA caseB caseC caseD caseE caseF)
 
 if [ ! -f "$STAND_DIR/cases.sh" ]; then
     echo "нет стенда: $STAND_DIR/cases.sh" >&2

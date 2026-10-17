@@ -90,6 +90,8 @@ DEFAULT_STATE = {
     "dns": "link",
     "help_tunnel": "1",
     "lists": "ipset-all",
+    "exclude": "ipset-exclude",
+    "uids": "",
 }
 
 # Порядок ключей = порядок строк в файле состояния.
@@ -103,6 +105,8 @@ WARP_STATE_KEYS = (
     "dns",
     "help_tunnel",
     "lists",
+    "exclude",
+    "uids",
 )
 
 STATE_HEADER = (
@@ -110,9 +114,24 @@ STATE_HEADER = (
     "# Читает /opt/warp/warp_start.sh; правится приложением (окно WARP).\n"
 )
 
+# Диапазон приоритетов правил селективного режима: всё, что мы добавляем,
+# снимается аварийной очисткой, даже если /run/warp/iprules потерян.
+CLEANUP_PRIO_MIN = 10000
+CLEANUP_PRIO_MAX = 12999
+RULES_CLEANUP = (
+    "for fam in '' -6; do "
+    "ip $fam rule show 2>/dev/null | "
+    "sed -n 's/^\\([0-9]\\{5\\}\\):.*/\\1/p' | "
+    "while read -r prio; do "
+    'case "$prio" in 1[0-2][0-9][0-9][0-9]) '
+    'ip $fam rule del priority "$prio" >/dev/null 2>&1 || true ;; esac; '
+    "done; done"
+)
+
 IFACE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,15}$")
 SNI_RE = re.compile(r"^[A-Za-z0-9.*_-]{1,253}$")
 LISTS_RE = re.compile(r"^[A-Za-z0-9._,:-]{0,512}$")
+UIDS_RE = re.compile(r"^[0-9,-]{0,128}$")
 VERSION_RE = re.compile(r"v?([0-9]+(?:\.[0-9]+)+)")
 
 
@@ -150,6 +169,24 @@ def rules_path() -> Path:
 
 def ipset_path() -> Path:
     return lists_dir() / IPSET_NAME
+
+
+def available_ipset_lists() -> list[str]:
+    """Имена ipset-списков для селективного режима (без .txt и без *_user).
+
+    Пользовательские дополнения (`<имя>_user.txt`) скрипт подхватывает сам,
+    поэтому в интерфейсе показываем только базовые имена.
+    """
+    result: list[str] = []
+    try:
+        for path in sorted(lists_dir().glob("ipset-*.txt")):
+            name = path.stem
+            if name.endswith("_user") or name == IPSET_NAME.removesuffix(".txt"):
+                continue
+            result.append(name)
+    except OSError:
+        return []
+    return result
 
 
 def sha256_file(path: Path) -> str | None:
@@ -207,6 +244,14 @@ def validate_state(state: dict) -> list[str]:
         problems.append("MTU: целое число от 576 до 1500")
     if not LISTS_RE.match(str(state.get("lists", ""))):
         problems.append("списки: допустимы буквы, цифры, «,», «.», «:», «-», «_»")
+    if not LISTS_RE.match(str(state.get("exclude", ""))):
+        problems.append("исключения: допустимы буквы, цифры, «,», «.», «:», «-», «_»")
+    if not UIDS_RE.match(str(state.get("uids", ""))):
+        problems.append("пользователи (uidrange): только цифры, «,» и «-»")
+    if str(state.get("mode")) == "select" and not str(state.get("lists", "")).strip() and not str(
+        state.get("uids", "")
+    ).strip():
+        problems.append("селективный режим: нужен хотя бы один список диапазонов или uidrange")
     return problems
 
 
@@ -428,6 +473,24 @@ class WarpManager:
             return None
         return None
 
+    def runtime_outdated(self) -> bool:
+        """Разошлись ли скрипты и юнит в /opt/warp с файлами поставки.
+
+        Полное обновление приложения меняет файлы в ~/Zapret_DPI_Manager и не
+        трогает /opt/warp: без этой проверки служба продолжала бы работать по
+        старой копии скриптов (так и случилось при проверке селективного режима).
+        """
+        source = repo_dir() / "warp" / "system"
+        for name in ("warp_start.sh", "warp_up.sh", "warp_down.sh", "warp_stop.sh"):
+            original = sha256_file(source / name)
+            installed = sha256_file(OPT_DIR / name)
+            if original and original != installed:
+                return True
+        unit_original = sha256_file(source / "warp.service")
+        if unit_original and unit_original != sha256_file(UNIT_PATH):
+            return True
+        return False
+
     def install_runtime(self) -> tuple[bool, str]:
         """Копирует скрипты и юнит WARP в систему (/opt/warp, /etc/systemd/system)."""
         source = repo_dir() / "warp" / "system"
@@ -516,11 +579,24 @@ class WarpManager:
         ok, message = self._run_sudo(["mkdir", "-p", str(OPT_DIR)], timeout=30)
         if not ok:
             return False, f"не удалось создать {OPT_DIR}: {message}"
+        # Бэкап текущего движка: установка идёт через временное имя и mv, но
+        # предыдущая версия должна остаться под рукой.
+        if USQUE_BIN.is_file():
+            backup = cache / "usque_backup"
+            try:
+                shutil.copy2(USQUE_BIN, backup)
+            except OSError as e:
+                get_error_logger().error("Бэкап usque не удался: %s", e)
+        staging = OPT_DIR / "usque.new"
         ok, message = self._run_sudo(
-            ["install", "-m", "755", str(candidate), str(USQUE_BIN)], timeout=120
+            ["install", "-m", "755", str(candidate), str(staging)], timeout=120
         )
         if not ok:
             return False, f"не удалось установить usque: {message}"
+        # Атомарная замена: обрыв на этом шаге не оставит обрезанный движок.
+        ok, message = self._run_sudo(["mv", "-f", str(staging), str(USQUE_BIN)], timeout=60)
+        if not ok:
+            return False, f"не удалось заменить usque: {message}"
 
         version_tmp = cache / "version"
         version_tmp.write_text(f"{version}\n", encoding="utf-8")
@@ -556,21 +632,35 @@ class WarpManager:
         if candidate.exists():
             candidate.unlink()
         self.progress("Регистрация аккаунта WARP...", 30)
-        try:
-            proc = subprocess.run(
-                [str(USQUE_BIN), "register", "--accept-tos", "-c", str(candidate)],
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-        except subprocess.TimeoutExpired:
-            return False, "регистрация не уложилась в 120 с (нет связи с Cloudflare?)"
-        except OSError as e:
-            return False, str(e)
-        output = ((proc.stdout or "") + (proc.stderr or "")).strip()
-        if proc.returncode != 0 or not candidate.is_file():
+        output = ""
+        proc = None
+        for attempt in (1, 2, 3):
+            if attempt > 1:
+                self.progress(f"Регистрация аккаунта WARP (попытка {attempt})...", 30)
+                time.sleep(4)
+            try:
+                proc = subprocess.run(
+                    [str(USQUE_BIN), "register", "--accept-tos", "-c", str(candidate)],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+            except subprocess.TimeoutExpired:
+                output = "регистрация не уложилась в 120 с (нет связи с Cloudflare?)"
+                continue
+            except OSError as e:
+                return False, str(e)
+            output = ((proc.stdout or "") + (proc.stderr or "")).strip()
+            if proc.returncode == 0 and candidate.is_file():
+                break
+        if proc is None or proc.returncode != 0 or not candidate.is_file():
             get_error_logger().error("usque register: %s", output)
-            return False, f"usque register завершился с кодом {proc.returncode}: {output or 'нет вывода'}"
+            hint = (
+                " Если провайдер блокирует Cloudflare, включите zapret (лечение внешнего "
+                "трафика туннеля) и повторите регистрацию."
+            )
+            code = proc.returncode if proc is not None else "?"
+            return False, f"usque register завершился с кодом {code}: {output or 'нет вывода'}.{hint}"
 
         text = candidate.read_text(encoding="utf-8", errors="replace")
         endpoints = [
@@ -775,3 +865,109 @@ class WarpManager:
         if manager.get_service_status() != "active":
             return True, "zapret не активен — перезапуск не нужен"
         return manager.restart_service()
+
+    # --- обслуживание ---
+    def update_usque(self) -> tuple[bool, str]:
+        """Обновляет движок usque; активную службу останавливает и поднимает снова."""
+        was_active = self.status() == "active"
+        if was_active:
+            ok, message = self.stop()
+            if not ok:
+                return False, f"не удалось остановить службу перед обновлением: {message}"
+        ok, message = self.install_usque()
+        if not ok:
+            if was_active:
+                self.start()
+            return False, message
+        if not was_active:
+            return True, message
+        ok, start_message = self.start()
+        if not ok:
+            return False, f"{message}, но служба не поднялась: {start_message}"
+        return True, f"{message}; служба перезапущена"
+
+    def rules_in_range(self) -> list[str]:
+        """Наши правила маршрутизации (приоритеты 10000-12999), без sudo."""
+        result: list[str] = []
+        for argv in (["ip", "rule", "show"], ["ip", "-6", "rule", "show"]):
+            ok, out = self._run(argv, timeout=10)
+            if not ok:
+                continue
+            for line in (out or "").splitlines():
+                priority = line.split(":", 1)[0].strip()
+                if priority.isdigit() and CLEANUP_PRIO_MIN <= int(priority) <= CLEANUP_PRIO_MAX:
+                    result.append(line.strip())
+        return result
+
+    def emergency_cleanup(self) -> tuple[bool, str]:
+        """Снимает всё, что WARP мог оставить: службу, маршруты, правила, DNS.
+
+        Нужна, когда состояние системы разошлось с состоянием приложения:
+        туннель мёртв, а маршруты или правила остались.
+        """
+        steps: list[str] = []
+        before = len(self.rules_in_range())
+
+        if (OPT_DIR / "warp_stop.sh").is_file():
+            ok, message = self._run_sudo(["bash", str(OPT_DIR / "warp_stop.sh")], timeout=120)
+            steps.append("служба остановлена, маршруты и DNS сняты" if ok else f"stop: {message}")
+        else:
+            steps.append("скриптов в /opt/warp нет — чищу напрямую")
+            for argv in (
+                ["ip", "route", "del", "default", "dev", "warp0", "table", "100"],
+                ["ip", "link", "del", "warp0"],
+            ):
+                self._run_sudo(argv, timeout=30)
+        # Правила могли остаться без файла /run/warp/iprules.
+        self._run_sudo(["bash", "-c", RULES_CLEANUP], timeout=60)
+
+        after = len(self.rules_in_range())
+        steps.append(f"наших правил маршрутизации: было {before}, осталось {after}")
+
+        state = read_state()
+        state["enabled"] = "0"
+        try:
+            self.apply_settings(state)
+            steps.append("состояние: WARP выключен")
+        except (ValueError, OSError) as e:
+            steps.append(f"состояние не сохранено: {e}")
+
+        ok, message = self.restart_zapret_if_active()
+        steps.append(f"zapret: {message}" if ok else f"zapret: {message}")
+
+        report = "; ".join(steps)
+        ok = after == 0
+        return ok, report
+
+    def uninstall(self, remove_engine: bool = True) -> tuple[bool, str]:
+        """Удаляет подсистему WARP: службу, юнит, скрипты, аккаунт и состояние.
+
+        Аккаунт Cloudflare будет потерян: после установки заново потребуется
+        повторная регистрация.
+        """
+        steps: list[str] = []
+        self.emergency_cleanup()
+        steps.append("состояние и правила сняты")
+
+        self._run_sudo(["systemctl", "disable", SERVICE_NAME], timeout=60)
+        self._run_sudo(["systemctl", "stop", SERVICE_NAME], timeout=90)
+        ok, message = self._run_sudo(["rm", "-f", str(UNIT_PATH)], timeout=30)
+        steps.append(f"юнит удалён: {UNIT_PATH}" if ok else f"юнит: {message}")
+        self._run_sudo(["systemctl", "daemon-reload"], timeout=60)
+
+        if remove_engine:
+            ok, message = self._run_sudo(["rm", "-rf", str(OPT_DIR)], timeout=120)
+            steps.append(f"каталог {OPT_DIR} удалён" if ok else f"{OPT_DIR}: {message}")
+
+        for path in (state_path(), rules_path()):
+            try:
+                path.unlink()
+                steps.append(f"{path.name} удалён")
+            except FileNotFoundError:
+                continue
+            except OSError as e:
+                steps.append(f"{path.name}: {e}")
+
+        self._run_sudo(["rm", "-rf", "/run/warp"], timeout=30)
+        self.restart_zapret_if_active()
+        return True, "; ".join(steps)

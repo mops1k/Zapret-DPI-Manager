@@ -49,6 +49,39 @@ for name in "${IFACES[@]}"; do
     fi
 done
 
+# Селективный режим: правила таблицы 100 снимаем по списку из /run/warp/iprules,
+# а если список потерян — по нашим диапазонам приоритетов (аварийный случай).
+SELECT_TABLE=100
+PRIO_MIN=10000
+PRIO_MAX=12999
+RULES_FILE="$STATE_DIR/iprules"
+removed_rules=0
+if [ -f "$RULES_FILE" ]; then
+    while read -r family prio; do
+        [ -n "${prio:-}" ] || continue
+        if [ "$family" = "6" ]; then
+            ip -6 rule del priority "$prio" > /dev/null 2>&1 && removed_rules=$((removed_rules + 1))
+        else
+            ip rule del priority "$prio" > /dev/null 2>&1 && removed_rules=$((removed_rules + 1))
+        fi
+    done < "$RULES_FILE"
+    rm -f "$RULES_FILE"
+fi
+for family_flag in "" "-6"; do
+    while read -r prio; do
+        [ -n "$prio" ] || continue
+        if [ "$prio" -ge "$PRIO_MIN" ] && [ "$prio" -le "$PRIO_MAX" ]; then
+            ip $family_flag rule del priority "$prio" > /dev/null 2>&1 &&
+                removed_rules=$((removed_rules + 1))
+        fi
+    done < <(ip $family_flag rule show 2>/dev/null | sed -n 's/^\([0-9]*\):.*/\1/p' || true)
+done
+ip route del default dev "$IFACE" table "$SELECT_TABLE" > /dev/null 2>&1 || true
+ip -6 route del default dev "$IFACE" table "$SELECT_TABLE" > /dev/null 2>&1 || true
+if [ "$removed_rules" -gt 0 ]; then
+    log "Селективный режим: снято правил маршрутизации — $removed_rules."
+fi
+
 # Маршрут до endpoint'а убираем только если его добавили мы (см. warp_up.sh).
 if [ -f "$STATE_DIR/route_owned" ]; then
     ENDPOINT="${USQUE_ENDPOINT:-}"

@@ -236,4 +236,83 @@ caseC() {
     summary
 }
 
+caseD() {
+    echo "### Доп. кейс D: селективный режим — списки, исключения и uidrange"
+    stand_setup
+    write_warp_txt 'enabled=1' 'mode=select' 'transport=quic' 'sni=consumer-masque.cloudflareclient.com' \
+        'iface=warp0' 'mtu=1280' 'dns=link' 'help_tunnel=1' \
+        'lists=ipset-all,ipset-telegram' 'exclude=ipset-exclude' 'uids=1000-1000'
+    run_start > /dev/null 2>&1
+    local rc=$?
+    echo "код возврата: $rc"
+    expect_rc "$rc" 0
+    expect_file "маркер подключения" "$STATE/connected"
+    expect_grep "таблица 100: default через туннель" \
+        "ip: argv: route replace default dev warp0 table 100" "$JOURNAL"
+    expect_grep "исключение уходит в main" \
+        "ip: argv: rule add to 198.51.100.0/24 lookup main priority 10000" "$JOURNAL"
+    expect_grep "v4-диапазон в таблицу 100" \
+        "ip: argv: rule add to 203.0.113.0/24 lookup 100 priority 11000" "$JOURNAL"
+    expect_grep "v6-диапазон через ip -6" \
+        "ip: argv: -6 rule add to 2001:db8:1::/48 lookup 100 priority 11001" "$JOURNAL"
+    expect_grep "второй список (telegram)" \
+        "ip: argv: rule add to 192.0.2.10 lookup 100 priority 11002" "$JOURNAL"
+    expect_grep "uidrange по пользователю" \
+        "ip: argv: rule add uidrange 1000-1000 lookup 100 priority 12000" "$JOURNAL"
+    expect_order "исключение раньше выбранных диапазонов" \
+        "rule add to 198.51.100.0/24 lookup main priority 10000" \
+        "rule add to 203.0.113.0/24 lookup 100 priority 11000" "$JOURNAL"
+    expect_grep "DNS остался системным" "DNS системный" "$JOURNAL"
+    if grep -q "resolvectl: dns" "$JOURNAL"; then
+        bad "в селективном режиме DNS туннеля настраивать нельзя"
+    else
+        ok "resolvectl dns не вызывался"
+    fi
+    expect_file "список правил для остановки" "$STATE/iprules"
+    show_journal
+    summary
+}
+
+caseE() {
+    echo "### Доп. кейс E: селективный режим — правила не завернули трафик (самопроверка и откат)"
+    stand_setup
+    write_warp_txt 'enabled=1' 'mode=select' 'transport=quic' 'sni=consumer-masque.cloudflareclient.com' \
+        'iface=warp0' 'mtu=1280' 'dns=link' 'help_tunnel=1' \
+        'lists=ipset-all' 'exclude=' 'uids='
+    run_start WARP_TEST_ROUTE_GET_MAIN=1 > /dev/null 2>&1
+    local rc=$?
+    echo "код возврата: $rc"
+    expect_rc "$rc" 1
+    expect_nofile "маркер подключения не поставлен" "$STATE/connected"
+    expect_file "причина сохранена для приложения" "$STATE/last_probe_failed"
+    expect_grep "правила сняты" "ip: argv: rule del priority 11000" "$JOURNAL"
+    expect_grep "таблица 100 убрана" "ip: argv: route del default dev warp0 table 100" "$JOURNAL"
+    expect_grep "понятное сообщение" "Самопроверка селективного режима не прошла" "$JOURNAL"
+    show_journal
+    summary
+}
+
+caseF() {
+    echo "### Доп. кейс F: аварийная очистка снимает правила без файла /run/warp/iprules"
+    stand_setup
+    default_warp_txt
+    printf '%s\n' 'family=4 to 203.0.113.0/24 lookup 100 priority 11000' \
+        'family=4 to 1.1.1.0/24 lookup 100 priority 11001' > "$IPRULES"
+    rm -f "$STATE/iprules"
+    run_stop > /dev/null 2>&1
+    local rc=$?
+    echo "код возврата: $rc"
+    expect_rc "$rc" 0
+    expect_grep "первое правило снято перебором" "ip: argv: rule del priority 11000" "$JOURNAL"
+    expect_grep "второе правило снято перебором" "ip: argv: rule del priority 11001" "$JOURNAL"
+    if grep -q 'priority 1100' "$IPRULES"; then
+        bad "правила остались в таблице"
+    else
+        ok "правила удалены из таблицы"
+    fi
+    expect_grep "таблица 100 убрана" "ip: argv: route del default dev warp0 table 100" "$JOURNAL"
+    show_journal
+    summary
+}
+
 "$@"

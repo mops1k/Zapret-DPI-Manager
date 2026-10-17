@@ -12,7 +12,10 @@ STATE="$STAND/state"
 JOURNAL="$STAND/journal.log"
 IFACES="$STAND/ifaces"
 ROUTES="$STAND/routes"
+IPRULES="$STAND/iprules"
 USQUE_LOG="$STAND/warp-usque.log"
+# Списки для селективного режима живут в домашнем каталоге стенда.
+LISTS="$STDHOME/Zapret_DPI_Manager/files/lists"
 WARPTXT="$STDHOME/Zapret_DPI_Manager/utils/warp.txt"
 
 setup_tun() {
@@ -27,10 +30,15 @@ setup_tun() {
 
 stand_setup() {
     setup_tun
-    rm -rf "$STATE" "$IFACES" "$ROUTES" "$JOURNAL" "$USQUE_LOG" "$USQUE_LOG.1"
-    mkdir -p "$STATE" "$IFACES" "$STDHOME/Zapret_DPI_Manager/utils" "$FAKE"
+    rm -rf "$STATE" "$IFACES" "$ROUTES" "$IPRULES" "$JOURNAL" "$USQUE_LOG" "$USQUE_LOG.1"
+    mkdir -p "$STATE" "$IFACES" "$STDHOME/Zapret_DPI_Manager/utils" "$FAKE" "$LISTS"
     : > "$JOURNAL"
     : > "$ROUTES"
+    : > "$IPRULES"
+    # Списки для селективного режима: маленькие, но с IPv4, IPv6 и исключением.
+    printf '%s\n' '# стенд' '203.0.113.0/24' '2001:db8:1::/48' > "$LISTS/ipset-all.txt"
+    printf '%s\n' '198.51.100.0/24' > "$LISTS/ipset-exclude.txt"
+    printf '%s\n' '192.0.2.10' > "$LISTS/ipset-telegram.txt"
     # Копии настоящих скриптов из репозитория: стенд всегда проверяет текущие версии.
     cp "$REPO/warp/system/warp_start.sh" "$FAKE/warp_start.sh"
     cp "$REPO/warp/system/warp_stop.sh" "$FAKE/warp_stop.sh"
@@ -53,7 +61,9 @@ default_warp_txt() {
         'mtu=1280' \
         'dns=link' \
         'help_tunnel=1' \
-        'lists='
+        'lists=' \
+        'exclude=' \
+        'uids='
 }
 
 # env -i: у скриптов «чистое» окружение, как у юнита systemd.
@@ -68,6 +78,7 @@ stand_env() {
         WARP_TEST_JOURNAL="$JOURNAL" \
         WARP_TEST_IFACES="$IFACES" \
         WARP_TEST_ROUTES="$ROUTES" \
+        WARP_TEST_RULES="$IPRULES" \
         "$@"
 }
 

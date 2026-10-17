@@ -698,6 +698,18 @@ class ZapretUninstaller:
             if not self.remove_zapret_directory():
                 self.log_debug("Предупреждение: не удалось удалить /opt/zapret, продолжаем...")
 
+            # 6.5 Удаляем подсистему WARP (служба, скрипты, движок, аккаунт, состояние)
+            self.update_progress("Удаление подсистемы WARP...", 78)
+            try:
+                from core.warp_manager import WarpManager
+
+                warp_ok, warp_message = WarpManager().uninstall()
+                self.log_debug(
+                    f"WARP: {warp_message}" if warp_ok else f"Предупреждение WARP: {warp_message}"
+                )
+            except Exception as e:
+                self.log_debug(f"Предупреждение: подсистему WARP удалить не удалось: {e}")
+
             # 7. Удаляем директорию менеджера
             self.update_progress("Удаление файлов менеджера...", 80)
             if not self.remove_manager_directory():

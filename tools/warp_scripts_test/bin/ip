@@ -1,24 +1,42 @@
 #!/bin/bash
-# Заглушка ip для стенда WARP: журналирует вызовы и держит «таблицу» маршрутов
-# и «маркеры» интерфейсов, чтобы проверять поведение скриптов без реальной сети.
+# Заглушка ip для стенда WARP: журналирует вызовы и держит «таблицу» маршрутов,
+# правила маршрутизации и «маркеры» интерфейсов, чтобы проверять поведение
+# скриптов без реальной сети.
 #
 # Таблица маршрутов: $WARP_TEST_ROUTES (строки как у настоящего ip).
-# Интерфейсы:        $WARP_TEST_IFACES/<имя> (файл-маркер = интерфейс существует).
+# Правила:          $WARP_TEST_RULES  (строки "family=N <аргументы> priority P").
+# Интерфейсы:       $WARP_TEST_IFACES/<имя> (файл-маркер = интерфейс существует).
 J="${WARP_TEST_JOURNAL:-/dev/null}"
 IFACES="${WARP_TEST_IFACES:-/dev/null/none}"
 ROUTES="${WARP_TEST_ROUTES:-/dev/null/none}"
+RULES="${WARP_TEST_RULES:-/dev/null/none}"
 printf '%s ip: argv: %s\n' "$(date +%H:%M:%S)" "$*" >> "$J"
 
+FAMILY=4
 ARGS=()
 for a in "$@"; do
     case "$a" in
-        -4|-6|-o|-br|-json|-n) ;;
+        -4) FAMILY=4 ;;
+        -6) FAMILY=6 ;;
+        -o|-br|-json|-n) ;;
         *) ARGS+=("$a") ;;
     esac
 done
 OBJ="${ARGS[0]:-}"
 ACT="${ARGS[1]:-}"
 ARG2="${ARGS[2]:-}"
+
+# arg_after <ключ> — значение, идущее после ключа (table 100, dev eth0, priority 10000)
+arg_after() {
+    local i
+    for ((i = 0; i < ${#ARGS[@]}; i++)); do
+        if [ "${ARGS[$i]}" = "$1" ]; then
+            echo "${ARGS[$((i + 1))]:-}"
+            return 0
+        fi
+    done
+    return 1
+}
 
 case "$OBJ $ACT" in
     "route show")
@@ -41,13 +59,129 @@ case "$OBJ $ACT" in
         exit 0
         ;;
     "route del")
-        LINE="${ARGS[*]:2}"
-        if grep -qF "$ARG2" "$ROUTES" 2>/dev/null; then
-            grep -vF "$ARG2" "$ROUTES" > "$ROUTES.tmp" 2>/dev/null || true
-            mv "$ROUTES.tmp" "$ROUTES"
+        # Удаляем только маршрут, совпадающий по всем заданным признакам
+        # (префикс + table/dev): иначе `route del default ... table 100`
+        # сносил бы и физический default.
+        patterns=("$ARG2")
+        tbl="$(arg_after table || true)"
+        dev="$(arg_after dev || true)"
+        [ -n "$tbl" ] && patterns+=("table $tbl")
+        [ -n "$dev" ] && patterns+=("dev $dev")
+        tmp="$ROUTES.tmp"
+        : > "$tmp"
+        removed=0
+        if [ -f "$ROUTES" ]; then
+            while IFS= read -r line || [ -n "$line" ]; do
+                match=1
+                for p in "${patterns[@]}"; do
+                    case "$line" in
+                        *"$p"*) ;;
+                        *) match=0 ;;
+                    esac
+                done
+                if [ "$match" = "1" ] && [ "$removed" = "0" ]; then
+                    removed=1
+                    continue
+                fi
+                printf '%s\n' "$line" >> "$tmp"
+            done < "$ROUTES"
+        fi
+        mv "$tmp" "$ROUTES"
+        if [ "$removed" = "1" ]; then
             printf '%s ip:   (удалён существующий %s)\n' "$(date +%H:%M:%S)" "$ARG2" >> "$J"
         else
             printf '%s ip:   (маршрута %s в таблице не было)\n' "$(date +%H:%M:%S)" "$ARG2" >> "$J"
+        fi
+        exit 0
+        ;;
+    "route get")
+        # Определяем выход так же, как ядро: сначала правила (наименьший приоритет
+        # побеждает), затем маршруты main. WARP_TEST_ROUTE_GET_MAIN=1 заставляет
+        # заглушку всегда отвечать «напрямую» — так проверяется самопроверка.
+        target="$ARG2"
+        [ -n "$target" ] || exit 0
+        decision=""
+        if [ "${WARP_TEST_ROUTE_GET_MAIN:-0}" != "1" ] && [ -f "$RULES" ]; then
+            decision=$(python3 - "$target" "$RULES" <<'PY' 2>/dev/null || true
+import ipaddress
+import sys
+
+target = ipaddress.ip_address(sys.argv[1])
+best = None
+with open(sys.argv[2], encoding="utf-8") as handle:
+    for line in handle:
+        parts = line.split()
+        if len(parts) < 6 or not parts[0].startswith("family="):
+            continue
+        if (parts[0].split("=", 1)[1] == "6") != (target.version == 6):
+            continue
+        try:
+            net = ipaddress.ip_network(parts[parts.index("to") + 1], strict=False)
+        except (ValueError, IndexError):
+            continue
+        if target not in net:
+            continue
+        lookup = parts[parts.index("lookup") + 1] if "lookup" in parts else "main"
+        try:
+            prio = int(parts[parts.index("priority") + 1])
+        except (ValueError, IndexError):
+            prio = 10 ** 9
+        if best is None or prio < best[0]:
+            best = (prio, lookup)
+print(best[1] if best else "")
+PY
+)
+        fi
+        if [ "$decision" = "100" ]; then
+            echo "$target dev warp0 src 172.16.0.2 uid 1000"
+        elif grep -qE '(^| )(0\.0\.0\.0/1|128\.0\.0\.0/1) dev warp0' "$ROUTES" 2>/dev/null; then
+            echo "$target dev warp0 src 172.16.0.2 uid 1000"
+        else
+            echo "$target via 192.168.1.1 dev eth0 src 192.168.1.50 uid 1000"
+        fi
+        exit 0
+        ;;
+    "rule add")
+        printf 'family=%s %s\n' "$FAMILY" "${ARGS[*]:2}" >> "$RULES"
+        exit 0
+        ;;
+    "rule del")
+        pat="${ARGS[*]:2}"
+        if [ -f "$RULES" ]; then
+            before=$(wc -l < "$RULES")
+            awk -v fam="family=$FAMILY " -v pat="$pat" '
+                !done && index($0, fam) == 1 && index($0, pat) > 0 { done = 1; next }
+                { print }
+            ' "$RULES" > "$RULES.tmp"
+            mv "$RULES.tmp" "$RULES"
+            after=$(wc -l < "$RULES")
+            if [ "$before" != "$after" ]; then
+                printf '%s ip:   (правило family=%s %s удалено)\n' "$(date +%H:%M:%S)" "$FAMILY" "$pat" >> "$J"
+            else
+                printf '%s ip:   (правила family=%s %s не было)\n' "$(date +%H:%M:%S)" "$FAMILY" "$pat" >> "$J"
+            fi
+        else
+            printf '%s ip:   (правила family=%s %s не было)\n' "$(date +%H:%M:%S)" "$FAMILY" "$pat" >> "$J"
+        fi
+        exit 0
+        ;;
+    "rule show")
+        # Как настоящий ip: "<приоритет>: <правило>"
+        if [ "$FAMILY" = "6" ]; then
+            flag6=1
+        else
+            flag6=0
+        fi
+        if [ -f "$RULES" ]; then
+            while IFS= read -r line || [ -n "$line" ]; do
+                line_family="${line#family=}"
+                line_family="${line_family%% *}"
+                [ "$line_family" = "$FAMILY" ] || continue
+                prio="$(printf '%s\n' "$line" | sed -n 's/.*priority \([0-9]*\).*/\1/p')"
+                [ -n "$prio" ] || continue
+                printf '%s:\t%s\n' "$prio" "$line"
+                [ "$flag6" = "1" ] || true
+            done < "$RULES"
         fi
         exit 0
         ;;
@@ -80,7 +214,11 @@ case "$OBJ $ACT" in
     "link add"|"addr add"|"addr del"|"link set")
         exit 0
         ;;
+    "")
+        exit 0
+        ;;
     *)
+        # Неизвестная команда: в журнал уже попала, ведём себя как успешная.
         exit 0
         ;;
 esac

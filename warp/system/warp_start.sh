@@ -31,7 +31,10 @@ IFACE="warp0"
 MTU="1280"
 DNS_MODE="link"
 HELP_TUNNEL="1"
+# Селективный режим: списки ipset-файлов, исключения и uidrange (по пользователю).
 LISTS=""
+EXCLUDE_LISTS=""
+UIDS=""
 
 # Ожидание подключения: подключение + самопроверка данных (до 2 попыток по 6 с).
 CONNECT_TIMEOUT="${WARP_CONNECT_TIMEOUT:-35}"
@@ -99,6 +102,8 @@ else
             dns) DNS_MODE="$value" ;;
             help_tunnel) HELP_TUNNEL="$value" ;;
             lists) LISTS="$value" ;;
+            exclude) EXCLUDE_LISTS="$value" ;;
+            uids) UIDS="$value" ;;
             ''|'#'*) ;;
             *) log "Файл состояния: неизвестный ключ '$key' пропущен." ;;
         esac
@@ -144,7 +149,17 @@ if [ -n "$LISTS" ] && ! [[ "$LISTS" =~ ^[A-Za-z0-9._,:-]+$ ]]; then
     LISTS=""
 fi
 
-log "Настройки: mode=$MODE transport=$TRANSPORT iface=$IFACE mtu=$MTU dns=$DNS_MODE help_tunnel=$HELP_TUNNEL sni=${SNI:-<по умолчанию>}"
+if [ -n "$EXCLUDE_LISTS" ] && ! [[ "$EXCLUDE_LISTS" =~ ^[A-Za-z0-9._,:-]+$ ]]; then
+    log "warp.txt: недопустимый список исключений '$EXCLUDE_LISTS', игнорирую."
+    EXCLUDE_LISTS=""
+fi
+
+if [ -n "$UIDS" ] && ! [[ "$UIDS" =~ ^[0-9,-]+$ ]]; then
+    log "warp.txt: недопустимый uidrange '$UIDS', игнорирую."
+    UIDS=""
+fi
+
+log "Настройки: mode=$MODE transport=$TRANSPORT iface=$IFACE mtu=$MTU dns=$DNS_MODE help_tunnel=$HELP_TUNNEL sni=${SNI:-<по умолчанию>} lists=${LISTS:-<нет>} exclude=${EXCLUDE_LISTS:-<нет>} uids=${UIDS:-<нет>}"
 
 # --- Предусловия ---
 [ -x "$USQUE" ] || die "Нет исполняемого $USQUE: установите WARP в приложении (окно WARP)."
@@ -153,7 +168,9 @@ log "Настройки: mode=$MODE transport=$TRANSPORT iface=$IFACE mtu=$MTU d
 command -v ip > /dev/null 2>&1 || die "Не найден ip (пакет iproute2)."
 
 if [ "$MODE" = "select" ]; then
-    log "Режим select: селективная маршрутизация появится на следующем этапе, сейчас туннель поднимается без маршрутов."
+    if [ -z "$LISTS" ] && [ -z "$UIDS" ]; then
+        die "Селективный режим: не выбрано ни одного списка или пользователя (utils/warp.txt, lists/uids)."
+    fi
 fi
 
 # --- Настройки для хуков (их читают warp_up.sh и warp_down.sh) ---
@@ -164,6 +181,9 @@ CONFIG_FILE="$STATE_DIR/config"
     printf 'dns=%s\n' "$DNS_MODE"
     printf 'help_tunnel=%s\n' "$HELP_TUNNEL"
     printf 'lists=%s\n' "$LISTS"
+    printf 'exclude=%s\n' "$EXCLUDE_LISTS"
+    printf 'uids=%s\n' "$UIDS"
+    printf 'lists_dir=%s\n' "$CURRENT_HOME/Zapret_DPI_Manager/files/lists"
 } > "$CONFIG_FILE"
 chmod 600 "$CONFIG_FILE" 2>/dev/null || true
 

@@ -155,6 +155,7 @@ class MainWarpMixin:
             return
 
         iface = state.get("iface") or "—"
+        mode_label = "полный туннель" if state.get("mode") != "select" else "только выбранные списки"
         if status == "active":
             transport = transport_label(WarpManager.active_transport())
             endpoint = WarpManager.active_endpoint() or "—"
@@ -162,7 +163,7 @@ class MainWarpMixin:
             if WarpManager.tunnel_connected():
                 self._set_warp_card_text(
                     f"WARP активен · {transport} · {iface}",
-                    f"Туннель: подключён · endpoint: {endpoint} · режим: полный туннель",
+                    f"Туннель: подключён · endpoint: {endpoint} · режим: {mode_label}",
                     role="success",
                 )
             elif probe_failure:
@@ -189,7 +190,7 @@ class MainWarpMixin:
                     "транспорт или включите «лечить внешний трафик туннеля через zapret»."
                 )
             else:
-                detail = f"Туннель: не подключён · интерфейс: {iface} · режим: полный туннель"
+                detail = f"Туннель: не подключён · интерфейс: {iface} · режим: {mode_label}"
             self._set_warp_card_text("WARP остановлен", detail, role="error")
             active = False
         else:
@@ -347,7 +348,9 @@ class MainWarpMixin:
         if not ok:
             return False, message
 
-        if not manager.unit_exists():
+        if not manager.unit_exists() or manager.runtime_outdated():
+            # Юнит ставится один раз, но сами скрипты после обновления приложения
+            # в /opt/warp не попадают: обновляем их перед запуском туннеля.
             ok, message = manager.install_runtime()
             if not ok:
                 return False, message

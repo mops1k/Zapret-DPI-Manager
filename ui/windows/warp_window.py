@@ -14,7 +14,13 @@ import webbrowser
 
 from core.app_logging import get_error_logger
 from core.dpi_utils import place_toplevel_centered_on_parent, safe_grab_set, wait_window_safely
-from core.warp_manager import DEFAULT_SNI, WarpManager, read_state, validate_state
+from core.warp_manager import (
+    DEFAULT_SNI,
+    WarpManager,
+    available_ipset_lists,
+    read_state,
+    validate_state,
+)
 from ui.components.material import (
     LinearProgress,
     MaterialCard,
@@ -231,6 +237,80 @@ class WarpWindow:
         self._build_account_card()
         self._build_settings_card()
         self._build_diagnostics_card()
+        self._build_maintenance_card()
+
+    def _build_maintenance_card(self) -> None:
+        """Обслуживание: аварийная очистка и удаление подсистемы."""
+        bg = self.ELEVATED_BG
+        card = MaterialCard(
+            self.content,
+            variant="outlined",
+            title="Обслуживание",
+            subtitle="Если состояние системы разошлось с состоянием приложения",
+        )
+        card.pack(fill=tk.X, pady=(0, theme.space("md")))
+
+        self._note(
+            card.content,
+            "Аварийная очистка снимает маршруты, правила, DNS и оставшиеся интерфейсы WARP "
+            "даже если файл правил потерян, и выключает WARP в состоянии приложения.",
+            bg,
+        )
+        row = self._row(card.content, bg)
+        self.cleanup_button = outlined_button(
+            row, "Аварийная очистка", self.emergency_cleanup, parent_role=bg
+        )
+        self.uninstall_button = outlined_button(
+            row, "Удалить подсистему WARP", self.uninstall_subsystem, parent_role=bg
+        )
+        self._pack_buttons(row, (self.cleanup_button, self.uninstall_button))
+
+    def emergency_cleanup(self) -> None:
+        """Аварийная очистка состояния WARP (с подтверждением)."""
+        if not ask_yes_no(
+            self.window,
+            "Снять состояние WARP?",
+            "Служба будет остановлена, а маршруты, правила маршрутизации, DNS и оставшиеся "
+            "интерфейсы WARP — сняты. WARP будет выключен в приложении.",
+            kind="warning",
+            yes_text="Очистить",
+            no_text="Отмена",
+        ):
+            return
+        self._start_task(
+            "Аварийная очистка состояния WARP…",
+            self.manager.emergency_cleanup,
+            self._after_maintenance,
+        )
+
+    def uninstall_subsystem(self) -> None:
+        """Удаляет подсистему WARP целиком (движок, аккаунт, юнит, состояние)."""
+        if not ask_yes_no(
+            self.window,
+            "Удалить подсистему WARP?",
+            "Будут удалены служба warp.service, скрипты и движок в /opt/warp, аккаунт Cloudflare "
+            "(/opt/warp/account.json) и настройки WARP. Аккаунт будет потерян — после установки "
+            "заново потребуется регистрация. Правила zapret для туннеля при этом снимаются.",
+            kind="warning",
+            yes_text="Удалить",
+            no_text="Отмена",
+        ):
+            return
+        self._start_task(
+            "Удаление подсистемы WARP…",
+            self.manager.uninstall,
+            self._after_maintenance,
+        )
+
+    def _after_maintenance(self, result) -> None:
+        ok, message = _as_result(result)
+        self.refresh_all()
+        self._refresh_action_states()
+        if ok:
+            self._set_status(message, role="success")
+            show_message(self.window, "Обслуживание WARP", message, kind="success")
+        else:
+            self._operation_failed("Обслуживание WARP завершилось с ошибкой", message)
 
     def _row(self, parent, bg_role: str, pady_key: str = "sm") -> tk.Frame:
         """Строка внутри карточки (кнопки, поля)."""
@@ -374,22 +454,91 @@ class WarpWindow:
         )
         card.pack(fill=tk.X, pady=(0, theme.space("md")))
 
-        # Режим: селективный появится на этапе 2 — сейчас только полный туннель.
-        self.mode_radio = MaterialRadio(
+        # Режим: полный туннель или только выбранные диапазоны (селективный).
+        self._mode_var.set(state.get("mode") or "full")
+        self.mode_full_radio = MaterialRadio(
             card.content,
-            "Полный туннель — весь трафик идёт через WARP",
+            "Полный туннель — весь IPv4-трафик идёт через WARP",
             variable=self._mode_var,
             value="full",
+            command=self._on_mode_changed,
             bg_role=bg,
         )
-        self.mode_radio.pack(anchor="w")
-        self.mode_radio.set_enabled(False)
-        self._note(
+        self.mode_full_radio.pack(anchor="w")
+        self.mode_select_radio = MaterialRadio(
             card.content,
-            "Селективный режим (выбор сайтов и списков) появится на этапе 2 и пока недоступен — "
-            "переключателя для него нет намеренно.",
+            "Только выбранные списки — в туннель уходят указанные диапазоны",
+            variable=self._mode_var,
+            value="select",
+            command=self._on_mode_changed,
+            bg_role=bg,
+        )
+        self.mode_select_radio.pack(anchor="w")
+
+        # Блок селективного режима: показывается только при выборе «по спискам».
+        self.select_frame = tk.Frame(card.content, bg=theme.color(bg))
+        self.select_frame.pack(fill=tk.X, pady=(theme.space("sm"), 0))
+
+        lists_label = tk.Label(
+            self.select_frame,
+            text="Списки диапазонов (files/lists/*.txt):",
+            anchor="w",
+            **theme.text("body_small", bg_role=bg, fg_role="on_surface_variant"),
+        )
+        lists_label.pack(anchor="w")
+
+        self.list_checkboxes = {}
+        self.exclude_checkboxes = {}
+        selected = {name for name in str(state.get("lists", "")).split(",") if name}
+        excluded = {name for name in str(state.get("exclude", "")).split(",") if name}
+        for name in available_ipset_lists():
+            self.list_checkboxes[name] = MaterialCheckbox(
+                self.select_frame,
+                name,
+                value=name in selected,
+                bg_role=bg,
+            )
+            self.list_checkboxes[name].pack(anchor="w")
+        if not self.list_checkboxes:
+            self._note(self.select_frame, "Списки ipset-*.txt не найдены.", bg, role="error")
+
+        ex_label = tk.Label(
+            self.select_frame,
+            text="Исключения (эти диапазоны всегда идут напрямую):",
+            anchor="w",
+            **theme.text("body_small", bg_role=bg, fg_role="on_surface_variant"),
+        )
+        ex_label.pack(anchor="w", pady=(theme.space("sm"), 0))
+        for name in available_ipset_lists():
+            self.exclude_checkboxes[name] = MaterialCheckbox(
+                self.select_frame,
+                name,
+                value=name in excluded,
+                bg_role=bg,
+            )
+            self.exclude_checkboxes[name].pack(anchor="w")
+
+        self.uids_field = MaterialTextField(
+            self.select_frame,
+            label="Пользователи (uidrange, например 1000-1000)",
+            width=30,
+            bg_role=bg,
+        )
+        self.uids_field.pack(fill=tk.X, pady=(theme.space("sm"), 0))
+        self.uids_field.insert(0, state.get("uids") or "")
+        self._note(
+            self.select_frame,
+            "Трафик указанных пользователей тоже уходит в туннель: приложение нужно "
+            "запускать под этим пользователем (uid).",
             bg,
         )
+        self._note(
+            self.select_frame,
+            "В селективном режиме DNS остаётся системным: маршрутизация идёт по IP-диапазонам.",
+            bg,
+        )
+
+        self._on_mode_changed()
 
         self.transport_dropdown = MaterialDropdown(
             card.content,
@@ -612,6 +761,18 @@ class WarpWindow:
         try:
             self.tos_checkbox.set_enabled(not busy)
         except tk.TclError:
+            pass
+
+        for checkboxes in (getattr(self, "list_checkboxes", {}), getattr(self, "exclude_checkboxes", {})):
+            for checkbox in checkboxes.values():
+                try:
+                    checkbox.set_enabled(not busy)
+                except (tk.TclError, AttributeError):
+                    continue
+        try:
+            self.mode_full_radio.set_enabled(not busy)
+            self.mode_select_radio.set_enabled(not busy)
+        except (tk.TclError, AttributeError):
             pass
 
         try:
@@ -882,10 +1043,35 @@ class WarpWindow:
         else:
             self._operation_failed("Операция с аккаунтом WARP не удалась", message)
 
+    def _on_mode_changed(self) -> None:
+        """Показывает настройки селективного режима только при его выборе."""
+        select_mode = self._mode_var.get() == "select"
+        try:
+            if select_mode:
+                self.select_frame.pack(fill=tk.X, pady=(theme.space("sm"), 0))
+                self.dns_dropdown.set_enabled(False)
+            else:
+                self.select_frame.pack_forget()
+                self.dns_dropdown.set_enabled(True)
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _selected(self, checkboxes) -> str:
+        """Собирает имена отмеченных списков в строку через запятую."""
+        chosen = []
+        for name, checkbox in checkboxes.items():
+            try:
+                if checkbox.get():
+                    chosen.append(name)
+            except tk.TclError:
+                continue
+        return ",".join(chosen)
+
     def save_settings(self) -> None:
         """Сохраняет настройки в utils/warp.txt и правила zapret для туннеля."""
         state = read_state()
-        state["mode"] = "full"
+        mode = self._mode_var.get() or "full"
+        state["mode"] = mode
         state["transport"] = self._value_for(
             TRANSPORT_CHOICES, self.transport_dropdown.get(), "auto"
         )
@@ -893,6 +1079,23 @@ class WarpWindow:
         state["mtu"] = (self.mtu_field.get() or "").strip()
         state["dns"] = self._value_for(DNS_CHOICES, self.dns_dropdown.get(), "link")
         state["help_tunnel"] = "1" if self.help_switch.get() else "0"
+        state["lists"] = self._selected(self.list_checkboxes)
+        state["exclude"] = self._selected(self.exclude_checkboxes)
+        state["uids"] = (self.uids_field.get() or "").strip()
+
+        if mode == "select" and not state["lists"] and not state["uids"]:
+            self._set_status(
+                "Селективный режим: отметьте хотя бы один список или укажите пользователя",
+                role="warning",
+            )
+            show_message(
+                self.window,
+                "Нечего заворачивать в туннель",
+                "В селективном режиме нужен хотя бы один список диапазонов или uidrange: "
+                "иначе туннель поднимется, но трафик в него не пойдёт.",
+                kind="warning",
+            )
+            return
 
         problems = validate_state(state)
         if problems:

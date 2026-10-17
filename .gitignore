@@ -14,3 +14,4 @@ tools/warp_scripts_test/fake-warp/
 tools/warp_scripts_test/routes
 tools/warp_scripts_test/journal.log
 tools/warp_scripts_test/warp-usque.log*
+tools/warp_scripts_test/iprules

@@ -153,7 +153,13 @@ class UpdateWindow:
         self.strategies_btn.pack(anchor=tk.CENTER, pady=(0, theme.space("xs")))
 
         self.engine_btn = outlined_button(main_frame, "Обновить движок", self.update_engine)
-        self.engine_btn.pack(anchor=tk.CENTER, pady=(0, theme.space("md")))
+        self.engine_btn.pack(anchor=tk.CENTER, pady=(0, theme.space("xs")))
+
+        # WARP (usque) обновляется отдельно: движок скачивается из релизов usque.
+        self.usque_btn = outlined_button(
+            main_frame, "Обновить движок WARP", self.update_usque
+        )
+        self.usque_btn.pack(anchor=tk.CENTER, pady=(0, theme.space("md")))
 
         log_card = MaterialCard(main_frame, variant="elevated", title="Лог обновлений")
         log_card.pack(fill=tk.X)
@@ -208,7 +214,7 @@ class UpdateWindow:
     def _set_buttons_state(self, enabled: bool):
         """Блокирует или разблокирует все кнопки окна."""
         state = tk.NORMAL if enabled else tk.DISABLED
-        for button in (self.app_btn, self.strategies_btn, self.engine_btn):
+        for button in (self.app_btn, self.strategies_btn, self.engine_btn, self.usque_btn):
             try:
                 button.config(state=state)
             except tk.TclError:
@@ -332,6 +338,37 @@ class UpdateWindow:
             self._safe_after(self._refresh_source_versions)
         except Exception as e:
             self.log_message(f"❌ Ошибка обновления движка: {e}")
+        finally:
+            self._safe_after(lambda: self._set_buttons_state(True))
+
+    def update_usque(self):
+        """Обновляет движок WARP (usque) из его GitHub-релизов."""
+        self._set_buttons_state(False)
+        self.clear_log()
+        thread = threading.Thread(target=self._update_usque_thread, daemon=True)
+        thread.start()
+
+    def _update_usque_thread(self):
+        try:
+            from core.warp_manager import WarpManager
+
+            manager = WarpManager(progress=self._source_progress)
+            self.log_message("🔄 Проверка движка WARP (usque)...")
+            installed = manager.installed_version()
+            upstream = manager.upstream_version()
+            self.log_message(
+                f"   установлен: {installed or 'нет'}, последний релиз: {upstream or 'неизвестен'}"
+            )
+            if not manager.is_installed() and not upstream:
+                self.log_message(f"❌ Релиз usque недоступен: {manager.release_error or 'нет связи'}")
+                return
+            ok, message = manager.update_usque()
+            self.log_message(("✅ " if ok else "❌ ") + message)
+            if ok and manager.status() == "active":
+                self.log_message("ℹ️ Служба WARP перезапущена с новым движком.")
+            self._safe_after(self._refresh_source_versions)
+        except Exception as e:
+            self.log_message(f"❌ Ошибка обновления движка WARP: {e}")
         finally:
             self._safe_after(lambda: self._set_buttons_state(True))
 
