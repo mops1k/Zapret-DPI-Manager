@@ -172,6 +172,10 @@ class MainUILayoutMixin:
         self._layout_service_buttons(force=True)
         self.service_buttons_row.bind("<Configure>", self._on_service_buttons_configure)
 
+        # --- Карточка WARP (usque) ---
+        # Туннель Cloudflare WARP управляется отдельно от службы zapret.
+        self.build_warp_card(content, t)
+
         # --- Карточка стратегии ---
         self.strategy_card = MaterialCard(
             content,

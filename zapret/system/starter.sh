@@ -192,6 +192,95 @@ fi
 # ДАЕМ ПРАВА НА ЧТЕНИЕ
 chmod -R a+r "$TEMP_DIR"
 
+# --- WARP (usque) ---------------------------------------------------------
+# WARP должен работать одновременно с zapret, поэтому:
+#   * интерфейс туннеля исключаем из NFQUEUE: трафик ВНУТРИ туннеля десинку не
+#     поддаётся (он уже зашифрован туннелем) и только мешает его работе;
+#   * endpoint'ы туннеля (трафик НАРУЖУ туннеля) исключаем из NFQUEUE, если
+#     «лечение через zapret» выключено; если включено — для них добавляются
+#     профили nfqws перед правилами пользователя (utils/warp_rules.txt).
+WARP_ENABLED=0
+WARP_IFACE="warp0"
+WARP_HELP="0"
+WARP_STATE_FILE="$CURRENT_HOME/Zapret_DPI_Manager/utils/warp.txt"
+WARP_RULES_FILE="$CURRENT_HOME/Zapret_DPI_Manager/utils/warp_rules.txt"
+if [ -f "$WARP_STATE_FILE" ]; then
+    while IFS='=' read -r key value || [ -n "$key" ]; do
+        value="${value%$'\r'}"
+        case "$key" in
+            enabled) WARP_ENABLED="$value" ;;
+            iface) WARP_IFACE="$value" ;;
+            help_tunnel) WARP_HELP="$value" ;;
+        esac
+    done < "$WARP_STATE_FILE"
+fi
+case "$WARP_ENABLED" in 1) ;; *) WARP_ENABLED=0 ;; esac
+case "$WARP_HELP" in 1) ;; *) WARP_HELP=0 ;; esac
+if ! [[ "$WARP_IFACE" =~ ^[A-Za-z0-9_.-]{1,15}$ ]]; then
+    echo "Warning: WARP: недопустимое имя интерфейса '$WARP_IFACE' — исключение по интерфейсу отключено." >&2
+    WARP_IFACE=""
+fi
+if [ "$WARP_ENABLED" = "1" ]; then
+    echo "WARP: включён (интерфейс ${WARP_IFACE:-не задан}, лечение через zapret: $WARP_HELP)"
+fi
+
+# Условия исключения интерфейса туннеля для nftables (пустое имя — без условия).
+WARP_IFACE_NFT_OUT=""
+WARP_IFACE_NFT_IN=""
+if [ -n "$WARP_IFACE" ]; then
+    WARP_IFACE_NFT_OUT="oifname != \"$WARP_IFACE\""
+    WARP_IFACE_NFT_IN="iifname != \"$WARP_IFACE\""
+fi
+
+# Endpoint'ы WARP: список ведёт приложение (files/lists/ipset-warp.txt);
+# фактический адрес текущего подключения берём из /run/warp/endpoint.
+WARP_EP_V4=""
+WARP_EP_V6=""
+add_warp_endpoint() {
+    local ip="$1"
+    [ -n "$ip" ] || return 0
+    if [[ "$ip" == *:* ]]; then
+        case ",$WARP_EP_V6," in
+            *",$ip,"*) ;;
+            *) WARP_EP_V6="${WARP_EP_V6:+$WARP_EP_V6,}$ip" ;;
+        esac
+    else
+        case ",$WARP_EP_V4," in
+            *",$ip,"*) ;;
+            *) WARP_EP_V4="${WARP_EP_V4:+$WARP_EP_V4,}$ip" ;;
+        esac
+    fi
+}
+if [ "$WARP_ENABLED" = "1" ]; then
+    if [ -f "$TEMP_DIR/ipset-warp.txt" ]; then
+        while IFS= read -r ip || [ -n "$ip" ]; do
+            ip="${ip%%#*}"
+            ip="$(printf '%s' "$ip" | tr -d ' \t\r')"
+            add_warp_endpoint "$ip"
+        done < "$TEMP_DIR/ipset-warp.txt"
+    fi
+    if [ -f /run/warp/endpoint ]; then
+        add_warp_endpoint "$(head -n 1 /run/warp/endpoint 2>/dev/null | tr -d ' \t\r\n' || true)"
+    fi
+fi
+
+# Раскрытие плейсхолдеров в правилах WARP. Набор обязан совпадать с шаблонами
+# QUIC_PROFILE/HTTP2_PROFILE в core/warp_manager.py; нераскрытый плейсхолдер —
+# ошибка конфигурации, а не повод тихо пропустить правило.
+EXPANDED_RULE=""
+expand_warp_rule() {
+    local value="$1"
+    value="${value//\{ipset_warp\}/$TEMP_DIR/ipset-warp.txt}"
+    value="${value//\{quicgoogle\}/$TEMP_DIR/quic_initial_www_google_com.bin}"
+    value="${value//\{tlsgoogle\}/$TEMP_DIR/tls_clienthello_www_google_com.bin}"
+    if [[ "$value" == *"{"*"}"* ]]; then
+        echo "ERROR: неизвестный плейсхолдер в правилах WARP: $1" >&2
+        return 1
+    fi
+    EXPANDED_RULE="$value"
+    return 0
+}
+
 ARGS=""
 CONFIG_FILE="$CURRENT_HOME/Zapret_DPI_Manager/config.txt"
 echo "Reading config from $CONFIG_FILE"
@@ -274,6 +363,23 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     fi
 done < "$CONFIG_FILE"
 
+# Профили WARP для внешнего трафика туннеля: nfqws применяет первый совпавший
+# профиль, поэтому они идут ПЕРЕД правилами пользователя.
+if [ "$WARP_ENABLED" = "1" ] && [ "$WARP_HELP" = "1" ] && [ -f "$WARP_RULES_FILE" ]; then
+    WARP_ARGS=""
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -n "${line//[[:space:]]/}" ] || continue
+        expand_warp_rule "$line" || exit 1
+        WARP_ARGS+=" $EXPANDED_RULE"
+    done < "$WARP_RULES_FILE"
+    if [ -n "$WARP_ARGS" ]; then
+        echo "WARP: профили для внешнего трафика туннеля:$WARP_ARGS"
+        ARGS="$WARP_ARGS$ARGS"
+    fi
+elif [ "$WARP_ENABLED" = "1" ]; then
+    echo "WARP: лечение через zapret выключено — endpoint'ы туннеля исключаются из NFQUEUE"
+fi
+
 echo "Final ARGS: $ARGS"
 
 # Сохраняем прежнее значение sysctl, чтобы stopper.sh мог его вернуть.
@@ -333,46 +439,99 @@ elif [ "$FWTYPE" = "nftables" ]; then
 fi
 
 if [ "$FWTYPE" = "iptables" ]; then
+    # Исключение интерфейса туннеля: проверяем опытным путём, принимает ли
+    # iptables -o/-i в пользовательской цепочке (в PREROUTING/POSTROUTING).
+    WARP_OUT_FLAGS=""
+    WARP_IN_FLAGS=""
+    if [ -n "$WARP_IFACE" ]; then
+        iptables -t mangle -N ZAPRET_PROBE 2>/dev/null || true
+        if iptables -t mangle -A ZAPRET_PROBE -o "$WARP_IFACE" -j RETURN 2>/dev/null &&
+            iptables -t mangle -A ZAPRET_PROBE -i "$WARP_IFACE" -j RETURN 2>/dev/null; then
+            WARP_OUT_FLAGS="! -o $WARP_IFACE"
+            WARP_IN_FLAGS="! -i $WARP_IFACE"
+        else
+            echo "Warning: iptables не принимает -o/-i в цепочке ZAPRET — внутренний трафик туннеля не исключается." >&2
+        fi
+        iptables -t mangle -F ZAPRET_PROBE 2>/dev/null || true
+        iptables -t mangle -X ZAPRET_PROBE 2>/dev/null || true
+    fi
+
     add_ipt_rule() {
         local proto=$1
         local ports=$2
         local qnum=$3
         local extra_flags=$4
+        local out_flags=$5
+        local in_flags=$6
 
         iptables -t mangle -I ZAPRET -p "$proto" -m multiport --dports "$ports" \
-            $extra_flags -j NFQUEUE --queue-num "$qnum" --queue-bypass
+            $out_flags $extra_flags -j NFQUEUE --queue-num "$qnum" --queue-bypass
         iptables -t mangle -I ZAPRET -p "$proto" -m multiport --sports "$ports" \
-            $extra_flags -j NFQUEUE --queue-num "$qnum" --queue-bypass
+            $in_flags $extra_flags -j NFQUEUE --queue-num "$qnum" --queue-bypass
         ip6tables -t mangle -I ZAPRET -p "$proto" -m multiport --dports "$ports" \
-            $extra_flags -j NFQUEUE --queue-num "$qnum" --queue-bypass
+            $out_flags $extra_flags -j NFQUEUE --queue-num "$qnum" --queue-bypass
         ip6tables -t mangle -I ZAPRET -p "$proto" -m multiport --sports "$ports" \
-            $extra_flags -j NFQUEUE --queue-num "$qnum" --queue-bypass
+            $in_flags $extra_flags -j NFQUEUE --queue-num "$qnum" --queue-bypass
     }
 
     if [ -n "$TCP_PORTS" ]; then
-        add_ipt_rule "tcp" "$TCP_PORTS" "200" "-m connbytes --connbytes-dir=original --connbytes-mode=packets --connbytes 1:12"
+        add_ipt_rule "tcp" "$TCP_PORTS" "200" "-m connbytes --connbytes-dir=original --connbytes-mode=packets --connbytes 1:12" "$WARP_OUT_FLAGS" "$WARP_IN_FLAGS"
     fi
     if [ -n "$UDP_PORTS" ]; then
-        add_ipt_rule "udp" "$UDP_PORTS" "200" "-m connbytes --connbytes-dir=original --connbytes-mode=packets --connbytes 1:12"
+        add_ipt_rule "udp" "$UDP_PORTS" "200" "-m connbytes --connbytes-dir=original --connbytes-mode=packets --connbytes 1:12" "$WARP_OUT_FLAGS" "$WARP_IN_FLAGS"
     fi
 
     if [ -n "$TCP_PORTS" ]; then
-        add_ipt_rule "tcp" "$TCP_PORTS" "200" "-m connbytes --connbytes-dir=reply --connbytes-mode=packets --connbytes 1:6"
+        add_ipt_rule "tcp" "$TCP_PORTS" "200" "-m connbytes --connbytes-dir=reply --connbytes-mode=packets --connbytes 1:6" "$WARP_OUT_FLAGS" "$WARP_IN_FLAGS"
     fi
     if [ -n "$UDP_PORTS" ]; then
-        add_ipt_rule "udp" "$UDP_PORTS" "200" "-m connbytes --connbytes-dir=reply --connbytes-mode=packets --connbytes 1:6"
+        add_ipt_rule "udp" "$UDP_PORTS" "200" "-m connbytes --connbytes-dir=reply --connbytes-mode=packets --connbytes 1:6" "$WARP_OUT_FLAGS" "$WARP_IN_FLAGS"
+    fi
+
+    # Endpoint'ы туннеля вне NFQUEUE (лечение выключено): правила вставляются
+    # последними, поэтому оказываются в начале цепочки — до правил NFQUEUE.
+    if [ "$WARP_ENABLED" = "1" ] && [ "$WARP_HELP" = "0" ]; then
+        if [ -n "$WARP_EP_V4" ]; then
+            for ip in ${WARP_EP_V4//,/ }; do
+                iptables -t mangle -I ZAPRET 1 -d "$ip" -j RETURN
+                iptables -t mangle -I ZAPRET 1 -s "$ip" -j RETURN
+            done
+        fi
+        if [ -n "$WARP_EP_V6" ]; then
+            for ip in ${WARP_EP_V6//,/ }; do
+                ip6tables -t mangle -I ZAPRET 1 -d "$ip" -j RETURN
+                ip6tables -t mangle -I ZAPRET 1 -s "$ip" -j RETURN
+            done
+        fi
+        if [ -n "$WARP_EP_V4$WARP_EP_V6" ]; then
+            echo "WARP: endpoint'ы туннеля исключены из NFQUEUE (v4: ${WARP_EP_V4:-нет}, v6: ${WARP_EP_V6:-нет})"
+        fi
     fi
 
 elif [ "$FWTYPE" = "nftables" ]; then
 
+    # Endpoint'ы туннеля вне NFQUEUE (лечение выключено): правила добавляются
+    # первыми, то есть раньше правил NFQUEUE ниже.
+    if [ "$WARP_ENABLED" = "1" ] && [ "$WARP_HELP" = "0" ]; then
+        if [ -n "$WARP_EP_V4" ]; then
+            nft add rule inet zapret postrouting ip daddr { $WARP_EP_V4 } return
+            nft add rule inet zapret prerouting ip saddr { $WARP_EP_V4 } return
+        fi
+        if [ -n "$WARP_EP_V6" ]; then
+            nft add rule inet zapret postrouting ip6 daddr { $WARP_EP_V6 } return
+            nft add rule inet zapret prerouting ip6 saddr { $WARP_EP_V6 } return
+        fi
+        echo "WARP: endpoint'ы туннеля исключены из NFQUEUE (v4: ${WARP_EP_V4:-нет}, v6: ${WARP_EP_V6:-нет})"
+    fi
+
     if [ -n "$TCP_PORTS" ]; then
-        nft add rule inet zapret postrouting tcp dport { $TCP_PORTS } ct original packets 1-12 queue num 200 bypass
-        nft add rule inet zapret prerouting tcp sport { $TCP_PORTS } ct reply packets 1-6 queue num 200 bypass
+        nft add rule inet zapret postrouting tcp dport { $TCP_PORTS } $WARP_IFACE_NFT_OUT ct original packets 1-12 queue num 200 bypass
+        nft add rule inet zapret prerouting tcp sport { $TCP_PORTS } $WARP_IFACE_NFT_IN ct reply packets 1-6 queue num 200 bypass
     fi
 
     if [ -n "$UDP_PORTS" ]; then
-        nft add rule inet zapret postrouting udp dport { $UDP_PORTS } ct original packets 1-12 queue num 200 bypass
-        nft add rule inet zapret prerouting udp sport { $UDP_PORTS } ct reply packets 1-6 queue num 200 bypass
+        nft add rule inet zapret postrouting udp dport { $UDP_PORTS } $WARP_IFACE_NFT_OUT ct original packets 1-12 queue num 200 bypass
+        nft add rule inet zapret prerouting udp sport { $UDP_PORTS } $WARP_IFACE_NFT_IN ct reply packets 1-6 queue num 200 bypass
     fi
 fi
 

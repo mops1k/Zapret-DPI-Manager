@@ -6,3 +6,11 @@ __pycache__/
 dist/
 utils/theme.txt
 utils/reports/
+# Рабочие каталоги стенда проверки скриптов WARP (создаются при запуске)
+tools/warp_scripts_test/state/
+tools/warp_scripts_test/ifaces/
+tools/warp_scripts_test/home/
+tools/warp_scripts_test/fake-warp/
+tools/warp_scripts_test/routes
+tools/warp_scripts_test/journal.log
+tools/warp_scripts_test/warp-usque.log*

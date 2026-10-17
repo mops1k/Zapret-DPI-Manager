@@ -1,0 +1,5 @@
+#!/bin/bash
+# Заглушка systemctl для стенда WARP (systemd в стенде нет).
+J="${WARP_TEST_JOURNAL:-/dev/null}"
+printf '%s systemctl: %s\n' "$(date +%H:%M:%S)" "$*" >> "$J"
+exit 0

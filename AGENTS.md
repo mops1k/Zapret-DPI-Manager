@@ -4,7 +4,8 @@
 
 - Сборка пакетов: `tools/build_release.sh` → `dist/Zapret_DPI_Manager.tar.gz` (полный пакет)
   и `dist/zapret_updater.tar.gz` (автообновление, без `config.txt` и `files/lists/*_user.txt`);
-  из `installer/install_zapret.sh` пересобирается `install_zapret.tar.gz`.
+  из `installer/install_zapret.sh` пересобирается `install_zapret.tar.gz`. В оба архива входит
+  каталог `warp/` (скрипты и юнит WARP), сборка проверяет его состав.
 - Версия хранится в `version.txt` (строка 1) и дублируется в `core/manager_config.py`
   (`current_version`) — менять синхронно. Строка 2 `version.txt` — URL архива обновления.
 - Релиз публикуется workflow `.github/workflows/release.yml` (тег `v*` или ручной запуск);
@@ -16,6 +17,8 @@
 ```bash
 python3 -m compileall -q core ui tools main.py
 bash -n zapret/system/starter.sh zapret/system/stopper.sh installer/install_zapret.sh
+for f in warp/system/*.sh; do bash -n "$f"; done
+bash tools/check_warp_scripts.sh                    # стенд скриптов WARP (в CI — через sudo)
 python3 tools/validate_strategies.py --dry-run     # плейсхолдеры, формат, nfqws --dry-run
 python3 tools/convert_flowseal_strategies.py --check
 python3 tools/check_bbdpi_convert.py               # конвертер BB DPI (ciadpi) → nfqws + dry-run
@@ -23,7 +26,8 @@ ruff check core ui tools main.py                   # конфиг в pyproject.t
 XAUTHORITY=$(ls /run/user/1000/xauth_* | head -1) python3 tools/smoke_ui_material.py  # дымовой тест всех окон
 ```
 
-CI (`.github/workflows/ci.yml`) выполняет те же шаги, кроме дымового теста окон.
+CI (`.github/workflows/ci.yml`) выполняет те же шаги, кроме дымового теста окон (стенд WARP
+запускается через `sudo`, ему нужен `dev/net/tun`; сам стенд — `tools/warp_scripts_test/`).
 
 ## Оформление (Material 3)
 
@@ -47,6 +51,18 @@ CI (`.github/workflows/ci.yml`) выполняет те же шаги, кром�
 - FWTYPE — единый источник истины `core/platform_info.detect_fwtype()` (nft → `nftables`,
   иначе `iptables`). Правила живут в собственной цепочке `ZAPRET` / таблице `inet zapret`,
   чужие правила (Docker/VPN/firewalld) не трогаются.
+- WARP (usque) — независимая от zapret подсистема: `core/warp_manager.py` + `warp/system/*.sh`
+  (приложение и установщик ставят их в `/opt/warp`, юнит `/etc/systemd/system/warp.service`),
+  состояние — `utils/warp.txt` (enabled/mode/transport/sni/iface/mtu/dns/help_tunnel/lists),
+  правила для внешнего трафика туннеля — `utils/warp_rules.txt`, endpoint'ы —
+  `files/lists/ipset-warp.txt` (плейсхолдер `{ipset_warp}`). Движок usque (MIT) скачивается
+  из GitHub-релизов с проверкой SHA256 уже приложением, аккаунт Cloudflare регистрируется
+  только после явного согласия с ToS. `zapret/system/starter.sh` исключает интерфейс туннеля
+  из NFQUEUE и либо возвращает endpoint'ы из цепочки (`help_tunnel=0`), либо ставит профили
+  WARP перед правилами пользователя (`help_tunnel=1`). `warp_start.sh` после подключения
+  сам проверяет, что данные через туннель идут, и иначе снимает маршруты и DNS (полный
+  туннель без самопроверки оставлял бы машину без интернета). Порядок включения: zapret
+  приводится в рабочее состояние ДО подъёма туннеля, иначе рукопожатие MASQUE ломается.
 - Все привилегированные команды — только через `core/sudo_helper.run_sudo` (`sudo -A` +
   `core/askpass.py`). Пароль приложение не хранит, кроме явного кэша 0600
   (`~/.cache/zapret_dpi_manager/sudo.cred`) по галочке «Запомнить».
@@ -88,6 +104,8 @@ CI (`.github/workflows/ci.yml`) выполняет те же шаги, кром�
   подставляются плейсхолдерами `{list_telegram}`, `{list_telegram_user}`, `{ipset_telegram}`,
   `{ipset_telegram_user}` (сливаются base+user, как остальные пары).
 - `files/bin/` — payload-бинарники; `zapret/bins/<arch>/nfqws` — движок (исполняемый бит обязателен).
+- `files/lists/ipset-warp.txt` — endpoint'ы Cloudflare WARP для правил `help_tunnel`; файл
+  обновляет окно WARP (`core.warp_manager.write_ipset`) при регистрации аккаунта.
 - `core/strategy_data.py` (`STRATEGY_OPTIONS`) — варианты конструктора стратегии;
   `core/game_presets.py` (`GAME_PRESETS`) — игровые пресеты.
 - `tools/flowseal_src/*.bat` — исходники стратегий из Flowseal/zapret-discord-youtube

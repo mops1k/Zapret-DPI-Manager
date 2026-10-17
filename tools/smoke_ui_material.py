@@ -231,8 +231,10 @@ def main() -> int:
     # --- Обновление, отчёт ---
     from ui.windows.report_window import ReportWindow, find_latest_report
     from ui.windows.update_window import UpdateProgressWindow, UpdateWindow
+    from ui.windows.warp_window import WarpWindow
 
     check("UpdateWindow", lambda: UpdateWindow(root), lambda w: w.root)
+    check("WarpWindow", lambda: WarpWindow(root), lambda w: w.create_window())
 
     def make_progress():
         window = UpdateProgressWindow(root, [])

@@ -25,10 +25,13 @@ jobs:
 
       - name: Shell syntax
         run: |
-          for file in zapret/system/*.sh tools/*.sh installer/*.sh; do
+          for file in zapret/system/*.sh warp/system/*.sh tools/*.sh installer/*.sh; do
             [ -f "$file" ] || continue
             bash -n "$file"
           done
+
+      - name: WARP scripts on the stub stand
+        run: sudo bash tools/check_warp_scripts.sh
 
       - name: Strategy files (placeholders, format)
         run: python tools/validate_strategies.py

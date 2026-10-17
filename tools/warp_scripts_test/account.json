@@ -1,0 +1,9 @@
+{
+  "private_key": "MHcCAQEEIB0example-private-key",
+  "endpoint_v4": "162.159.193.10",
+  "endpoint_v6": "2606:4700:100::a29f:c10a",
+  "endpoint_h2_v4": "162.159.198.2",
+  "endpoint_h2_v6": "2606:4700:100::a29f:c602",
+  "endpoint_pub_key": "bmV4dC1wdWIta2V5LXdhcnA=",
+  "license": "Q0xPVURGTEFSRS1XQVJQLUxJQ0VOU0U="
+}

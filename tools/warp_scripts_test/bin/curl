@@ -1,0 +1,11 @@
+#!/bin/bash
+# Заглушка curl для стенда скриптов WARP.
+# PROBE_FAIL=1 — самопроверка данных через туннель «не проходит» (код 000).
+# Иначе — «успех» (код 200), как у настоящего /cdn-cgi/trace.
+echo "curl: argv: $*" >> "${WARP_TEST_JOURNAL:-/dev/null}"
+if [ "${PROBE_FAIL:-0}" = "1" ]; then
+    printf '000'
+else
+    printf '200'
+fi
+exit 0

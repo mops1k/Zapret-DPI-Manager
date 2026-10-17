@@ -1,0 +1,45 @@
+#!/bin/bash
+# Заглушка pkill для стенда WARP (см. комментарий в bin/pgrep про префикс bash).
+J="${WARP_TEST_JOURNAL:-/dev/null}"
+SIG="TERM"
+PAT=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -f) PAT="${2:-}"; shift ;;
+        -TERM|-15) SIG="TERM" ;;
+        -KILL|-9) SIG="KILL" ;;
+        -*) ;;
+        *) [ -n "$PAT" ] || PAT="$1" ;;
+    esac
+    shift
+done
+printf '%s pkill: -%s -f %s\n' "$(date +%H:%M:%S)" "$SIG" "$PAT" >> "$J"
+
+match_pids() {
+    local p pid raw norm
+    for p in /proc/[0-9]*; do
+        pid="${p#/proc/}"
+        [ "$pid" = "$$" ] && continue
+        [ -r "$p/cmdline" ] || continue
+        raw=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
+        [ -n "$raw" ] || continue
+        raw="${raw% }"
+        norm="${raw#/bin/bash }"
+        norm="${norm#/usr/bin/bash }"
+        norm="${norm#bash }"
+        if printf '%s\n' "$norm" | grep -Eq -- "$PAT"; then
+            printf '%s\n' "$pid"
+        fi
+    done
+}
+
+found=$(match_pids)
+if [ -z "$found" ]; then
+    printf '%s pkill:   (совпадений нет)\n' "$(date +%H:%M:%S)" >> "$J"
+    exit 1
+fi
+for pid in $found; do
+    printf '%s pkill:   -> kill -%s %s\n' "$(date +%H:%M:%S)" "$SIG" "$pid" >> "$J"
+    kill -"$SIG" "$pid" 2>/dev/null || true
+done
+exit 0

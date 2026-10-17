@@ -27,7 +27,9 @@ while [ $# -gt 0 ]; do
 done
 
 # Пути внутри ~/Zapret_DPI_Manager (в том же виде, что в релизах: с префиксом ./).
-PACKAGE_PATHS=(./main.py ./core ./ui ./files ./ico ./utils ./zapret ./config.txt)
+# ./warp — скрипты и юнит подсистемы WARP (usque): само приложение устанавливает
+# их в /opt/warp, поэтому каталог обязан попадать в оба архива.
+PACKAGE_PATHS=(./main.py ./core ./ui ./files ./ico ./utils ./zapret ./warp ./config.txt)
 
 # Пользовательские файлы, которые обновление не должно затирать.
 USER_FILES=(
@@ -79,3 +81,15 @@ fi
 if tar tzf "${MANAGER_ARCHIVE}" | grep -qE '__pycache__|\.pyc$'; then
     echo "предупреждение: в архив попали __pycache__/*.pyc" >&2
 fi
+
+# Подсистема WARP должна быть в обоих архивах целиком: без неё приложение не
+# сможет поставить /opt/warp/warp_start.sh и юнит warp.service.
+for archive in "${MANAGER_ARCHIVE}" "${UPDATER_ARCHIVE}"; do
+    for required in ./warp/system/warp_start.sh ./warp/system/warp_stop.sh ./warp/system/warp.service; do
+        if ! tar tzf "${archive}" | grep -qx -- "${required}"; then
+            echo "ошибка: в $(basename "${archive}") нет ${required}" >&2
+            exit 1
+        fi
+    done
+done
+echo "проверка состава WARP: файлы на месте в обоих архивах"

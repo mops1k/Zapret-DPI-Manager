@@ -1,0 +1,5 @@
+#!/bin/bash
+# Заглушка logger: пишет вызов в журнал стенда (journald в стенде нет).
+J="${WARP_TEST_JOURNAL:-/dev/null}"
+printf '%s logger: %s\n' "$(date +%H:%M:%S)" "$*" >> "$J"
+exit 0

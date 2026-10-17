@@ -22,6 +22,11 @@ ZAPRET_SYSTEMD_UNIT_DIR="/etc/systemd/system"
 ZAPRET_SYSTEMD_UNIT_PATH="/etc/systemd/system/zapret.service"
 ZAPRET_SYSTEMD_UNIT_PATH_LEGACY="/usr/lib/systemd/system/zapret.service"
 
+# Подсистема WARP (usque): скрипты ставятся сюда, движок usque и аккаунт
+# Cloudflare ставит само приложение (согласие с ToS даёт пользователь).
+WARP_OPT_DIR="/opt/warp"
+WARP_SYSTEMD_UNIT_PATH="/etc/systemd/system/warp.service"
+
 # Только Valve SteamOS: ID=steamos в /etc/os-release (как core.platform_info.is_valve_steamos)
 is_valve_steamos() {
     [ -f /etc/os-release ] || return 1
@@ -1115,6 +1120,38 @@ WantedBy=multi-user.target"
         echo "# Автозапуск службы zapret включён"
     else
         echo "# Внимание: не удалось включить автозапуск zapret.service" >&2
+    fi
+
+    echo "88"
+    echo "# Установка подсистемы WARP (usque)..."
+    # Скрипты и юнит WARP ставятся сразу, чтобы приложение не требовало sudo для
+    # их установки. Движок usque (MIT) и регистрацию аккаунта выполняет окно WARP
+    # приложения: согласие с условиями Cloudflare WARP даёт пользователь.
+    # Как и у службы zapret, сбой этих шагов не должен прерывать установку.
+    WARP_SRC_DIR="$TARGET_DIR/warp/system"
+    if [ -d "$WARP_SRC_DIR" ]; then
+        if run_sudo mkdir -p "$WARP_OPT_DIR" &&
+            run_sudo cp -f "$WARP_SRC_DIR/"*.sh "$WARP_OPT_DIR/" &&
+            run_sudo chmod 755 "$WARP_OPT_DIR/"*.sh; then
+            echo "# Скрипты WARP установлены в $WARP_OPT_DIR"
+        else
+            echo "# Внимание: не удалось установить скрипты WARP в $WARP_OPT_DIR" >&2
+        fi
+        if [ -f "$WARP_SRC_DIR/warp.service" ]; then
+            if write_file_with_sudo "$WARP_SYSTEMD_UNIT_PATH" "$(cat "$WARP_SRC_DIR/warp.service")" &&
+                run_sudo chmod 644 "$WARP_SYSTEMD_UNIT_PATH"; then
+                echo "# Служба systemd создана: $WARP_SYSTEMD_UNIT_PATH"
+            else
+                echo "# Внимание: не удалось создать $WARP_SYSTEMD_UNIT_PATH" >&2
+            fi
+        fi
+        # Служба WARP не включается и не запускается: её включает пользователь в
+        # окне WARP после установки движка usque и регистрации аккаунта.
+        if ! run_sudo systemctl daemon-reload; then
+            echo "# Внимание: systemctl daemon-reload завершился с ошибкой" >&2
+        fi
+    else
+        echo "# Внимание: в архиве нет каталога warp/system — подсистема WARP будет недоступна" >&2
     fi
 
     sleep 2

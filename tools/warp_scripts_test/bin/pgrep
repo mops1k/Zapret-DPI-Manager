@@ -1,0 +1,43 @@
+#!/bin/bash
+# Заглушка pgrep для стенда WARP.
+#
+# Отличие от настоящего pgrep одно: usque в стенде — скрипт, поэтому в
+# /proc/<pid>/cmdline он выглядит как «/bin/bash /path/usque nativetun ...».
+# Этот префикс отбрасывается, чтобы шаблон «^<WARP_DIR>/usque nativetun»
+# проверялся так же, как для настоящего бинарника usque в бою.
+J="${WARP_TEST_JOURNAL:-/dev/null}"
+PAT=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -f) PAT="${2:-}"; shift ;;
+        -*) ;;
+        *) [ -n "$PAT" ] || PAT="$1" ;;
+    esac
+    shift
+done
+printf '%s pgrep: -f %s\n' "$(date +%H:%M:%S)" "$PAT" >> "$J"
+
+match_pids() {
+    local p pid raw norm
+    for p in /proc/[0-9]*; do
+        pid="${p#/proc/}"
+        [ "$pid" = "$$" ] && continue
+        [ -r "$p/cmdline" ] || continue
+        raw=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
+        [ -n "$raw" ] || continue
+        raw="${raw% }"
+        norm="${raw#/bin/bash }"
+        norm="${norm#/usr/bin/bash }"
+        norm="${norm#bash }"
+        if printf '%s\n' "$norm" | grep -Eq -- "$PAT"; then
+            printf '%s\n' "$pid"
+        fi
+    done
+}
+
+found=$(match_pids)
+if [ -n "$found" ]; then
+    printf '%s\n' "$found"
+    exit 0
+fi
+exit 1

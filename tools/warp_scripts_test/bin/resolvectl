@@ -1,0 +1,8 @@
+#!/bin/bash
+# Заглушка resolvectl: журналирует вызовы, `status` успешен (systemd-resolved «есть»).
+J="${WARP_TEST_JOURNAL:-/dev/null}"
+printf '%s resolvectl: %s\n' "$(date +%H:%M:%S)" "$*" >> "$J"
+case "${1:-}" in
+    status) echo "Global: LLMNR=resolve" ;;
+esac
+exit 0

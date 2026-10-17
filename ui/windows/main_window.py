@@ -13,6 +13,7 @@ from ui.windows.main.main_startup import MainStartupMixin
 from ui.windows.main.main_tooltips import MainTooltipsMixin
 from ui.windows.main.main_ui import MainUIMixin
 from ui.windows.main.main_updates import MainUpdatesMixin
+from ui.windows.main.main_warp import MainWarpMixin
 
 
 class MainWindow(
@@ -23,6 +24,7 @@ class MainWindow(
     MainUIMixin,
     MainGameFilterMixin,
     MainServiceMixin,
+    MainWarpMixin,
 ):
     """Главное окно: композиция миксинов из ui.windows.main."""
 

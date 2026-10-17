@@ -26,6 +26,7 @@ class MainUISettingsMixin:
         ("Настройки IPSet", "open_ipset_settings", "◎"),
         ("Настройки DNS", "open_dns_settings", "⇄"),
         ("Разблокировать сервисы", "open_service_unlock", "🔓"),
+        ("WARP (usque)", "open_warp_settings", "🛰"),
         ("Обновить Zapret", "open_update_settings", "⬆"),
         ("Забыть пароль sudo", "forget_sudo_password", "🔑"),
         ("Удалить Zapret", "uninstall_zapret", "🗑"),
@@ -192,6 +193,14 @@ class MainUISettingsMixin:
         """Открывает окно разблокировки сервисов."""
         self.close_settings_menu()
         ServiceUnlockWindow(self.root).run()
+
+    def open_warp_settings(self):
+        """Открывает окно WARP (usque): движок, аккаунт, настройки, диагностика."""
+        self.close_settings_menu()
+        from ui.windows.warp_window import WarpWindow
+
+        WarpWindow(self.root).run()
+        self.check_warp_status()
 
     def open_update_settings(self):
         """Открывает окно обновления Zapret."""

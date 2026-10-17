@@ -39,6 +39,7 @@ PLACEHOLDER_FILES = {
     "list_telegram_user": "files/lists/list-telegram_user.txt",
     "ipset_telegram": "files/lists/ipset-telegram.txt",
     "ipset_telegram_user": "files/lists/ipset-telegram_user.txt",
+    "ipset_warp": "files/lists/ipset-warp.txt",
     "list_google": "files/lists/list-google.txt",
     "gw": "files/lists/gw.txt",
     "other": "files/lists/other.txt",
@@ -85,8 +86,10 @@ sys.path.insert(0, str(REPO_ROOT))
 try:
     from core.game_presets import GAME_PRESETS
     from core.strategy_data import STRATEGY_OPTIONS
+    from core.warp_manager import warp_profiles
 except Exception as exc:  # pragma: no cover
     STRATEGY_OPTIONS, GAME_PRESETS = {}, {}
+    warp_profiles = None
     print(f"Предупреждение: не удалось загрузить данные стратегий: {exc}", file=sys.stderr)
 
 
@@ -109,6 +112,10 @@ def data_lines() -> list[tuple[str, str]]:
                 continue
             if value:
                 lines.append((f"game_presets:{preset_id}:{field}", f"--filter-{proto}={value}"))
+    # Профили WARP для внешнего трафика туннеля (utils/warp_rules.txt).
+    if warp_profiles:
+        for index, line in enumerate(warp_profiles("auto"), start=1):
+            lines.append((f"warp_manager:профиль {index}", line.strip()))
     return lines
 
 

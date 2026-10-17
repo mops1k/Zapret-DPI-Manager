@@ -1,0 +1,16 @@
+[Unit]
+Description=WARP (usque) tunnel for Zapret DPI Manager
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/warp
+ExecStart=/bin/bash /opt/warp/warp_start.sh
+ExecStop=/bin/bash /opt/warp/warp_stop.sh
+TimeoutStartSec=120
+TimeoutStopSec=40
+
+[Install]
+WantedBy=multi-user.target
