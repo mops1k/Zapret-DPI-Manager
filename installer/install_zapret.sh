@@ -950,7 +950,7 @@ set -o pipefail
 
     echo "20"
     echo "# Скачивание Zapret DPI Manager..."
-    ARCHIVE_URL="https://github.com/mops1k/Zapret-DPI-for-Steam-Deck/releases/latest/download/Zapret_DPI_Manager.tar.gz"
+    ARCHIVE_URL="https://github.com/mops1k/Zapret-DPI-Manager/releases/latest/download/Zapret_DPI_Manager.tar.gz"
     ARCHIVE_PATH="$TEMP_DIR/Zapret_DPI_Manager.tar.gz"
 
     if ! wget -q -O "$ARCHIVE_PATH" "$ARCHIVE_URL"; then

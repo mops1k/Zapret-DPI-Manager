@@ -1,2 +1,2 @@
-2.10.0
-https://github.com/mops1k/Zapret-DPI-for-Steam-Deck/releases/latest/download/zapret_updater.tar.gz
+2.10.1
+https://github.com/mops1k/Zapret-DPI-Manager/releases/latest/download/zapret_updater.tar.gz

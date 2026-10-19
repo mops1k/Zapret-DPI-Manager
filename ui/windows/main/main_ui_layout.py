@@ -323,7 +323,7 @@ class MainUILayoutMixin:
         import webbrowser
 
         url = (
-            "https://github.com/mops1k/Zapret-DPI-for-Steam-Deck/blob/main/"
+            "https://github.com/mops1k/Zapret-DPI-Manager/blob/main/"
             "docs/user-guide-zapret-dpi-manager-steam-deck-ru.md"
         )
         try:

@@ -516,7 +516,7 @@ class DependencyChecker:
         self.current_task = "download"
         self.log_debug("Скачивание пакета ipset из GitHub с помощью curl...")
 
-        github_url = "https://github.com/mops1k/Zapret-DPI-for-Steam-Deck/raw/main/ipset-7.23-1-x86_64.pkg.tar.zst"
+        github_url = "https://github.com/mops1k/Zapret-DPI-Manager/raw/main/ipset-7.23-1-x86_64.pkg.tar.zst"
         temp_dir = tempfile.mkdtemp(prefix="ipset_install_")
         local_file = os.path.join(temp_dir, "ipset-7.23-1-x86_64.pkg.tar.zst")
 

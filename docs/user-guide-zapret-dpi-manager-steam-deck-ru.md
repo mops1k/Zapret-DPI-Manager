@@ -338,7 +338,7 @@ Hostlist в менеджере разделён на две логики: **ку
 
 ## Где узнать больше и как помочь проекту
 
-- **Исходный код и релизы Zapret DPI Manager 2.0 для Steam Deck:** [github.com/mops1k/Zapret-DPI-for-Steam-Deck](https://github.com/mops1k/Zapret-DPI-for-Steam-Deck)
+- **Исходный код и релизы Zapret DPI Manager 2.0 для Steam Deck:** [github.com/mops1k/Zapret-DPI-Manager](https://github.com/mops1k/Zapret-DPI-Manager)
 - В главном окне значок **$** открывает окно **поддержки разработчика** — если менеджер вам помог, вы можете поблагодарить авторов удобным для вас способом.
 
 ---

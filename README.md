@@ -3,7 +3,7 @@
 Служба Zapret DPI основывается на разработке https://github.com/ImMALWARE. Большое ему спасибо за создание!
 Стратегии и некоторые доработки берутся из версии Zapret для Windows от [Flowseal](https://github.com/Flowseal/zapret-discord-youtube)
 
-Проект развивается в форке [mops1k/Zapret-DPI-for-Steam-Deck](https://github.com/mops1k/Zapret-DPI-for-Steam-Deck): исходный репозиторий автора больше не обновляется, поэтому свежие стратегии, списки домен/IP, payload-бинарники и обновления службы выходят здесь.
+Проект развивается в форке [mops1k/Zapret-DPI-Manager](https://github.com/mops1k/Zapret-DPI-Manager): исходный репозиторий автора больше не обновляется, поэтому свежие стратегии, списки домен/IP, payload-бинарники и обновления службы выходят здесь.
 
 ## Назначение
 
@@ -23,7 +23,7 @@
 ### SteamOS
 Для работы вам понадобится sudo пароль. Его можно установить через консоль командой `passwd`
 
-1. Скачать ярлык [Zepret_Manager_V2_Install.desktop](https://github.com/mops1k/Zapret-DPI-for-Steam-Deck/blob/main/Zepret_Manager_V2_Install.desktop) 
+1. Скачать ярлык [Zepret_Manager_V2_Install.desktop](https://github.com/mops1k/Zapret-DPI-Manager/blob/main/Zepret_Manager_V2_Install.desktop) 
 2. Запустить ярлык. Ярлык сам скачает установщик, распакует его и запустит
 3. Ввести sudo пароль, когда появится окно для ввода пароля
 4. Дождаться окончания установки
@@ -31,7 +31,7 @@
 ### Другие ОС
 Для работы вам понадобится sudo пароль. Его можно установить через консоль командой `passwd`
 
-1. Скачать архив установщика [install_zapret.tar.gz](https://github.com/mops1k/Zapret-DPI-for-Steam-Deck/raw/refs/heads/main/install_zapret.tar.gz)
+1. Скачать архив установщика [install_zapret.tar.gz](https://github.com/mops1k/Zapret-DPI-Manager/raw/refs/heads/main/install_zapret.tar.gz)
 2. Распаковать в удобном месте
 3. Запустить install_zapret.sh и следовать шагам установщика
 
