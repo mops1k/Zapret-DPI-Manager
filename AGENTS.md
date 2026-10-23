@@ -22,6 +22,7 @@ bash tools/check_warp_scripts.sh                    # стенд скрипто�
 python3 tools/validate_strategies.py --dry-run     # плейсхолдеры, формат, nfqws --dry-run
 python3 tools/convert_flowseal_strategies.py --check
 python3 tools/check_bbdpi_convert.py               # конвертер BB DPI (ciadpi) → nfqws + dry-run
+python3 tools/check_github_fetch.py                # цепочка провайдеров core/github_fetch.py (без сети)
 ruff check core ui tools main.py                   # конфиг в pyproject.toml
 XAUTHORITY=$(ls /run/user/1000/xauth_* | head -1) python3 tools/smoke_ui_material.py  # дымовой тест всех окон
 ```
@@ -78,6 +79,10 @@ CI (`.github/workflows/ci.yml`) выполняет те же шаги, кром�
 - Плейсхолдеры `{...}` в `config.txt` раскрывает `zapret/system/starter.sh`; набор
   поддерживаемых плейсхолдеров проверяет `tools/validate_strategies.py`.
 - Логи ошибок: `~/.local/state/zapret_dpi_manager/error.log` (0600, ротация).
+- Скачивание всех raw-файлов GitHub идёт через `core/github_fetch.py` (raw → api.github.com →
+  codeload-архив → зеркало jsDelivr/`ZAPRET_GH_MIRROR` → кэш `~/.cache/zapret_dpi_manager/gh_cache`),
+  потому что `raw.githubusercontent.com` в РФ периодически недоступен; прямые `urlopen(raw-URL)`
+  в новом коде не добавлять.
 - Обновление по частям без полного обновления приложения (окно «Обновить Zapret», три
   кнопки — приложение / стратегии / движок): `core/strategies_updater.py` (стратегии и
   payload'ы из Flowseal) и `core/engine_updater.py` (движок nfqws из ImMALWARE/zapret-linux-easy).

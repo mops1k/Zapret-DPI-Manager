@@ -32,6 +32,7 @@ import urllib.request
 from pathlib import Path
 
 from core.app_logging import get_error_logger
+from core.github_fetch import fetch_bytes
 from core.flowseal_convert import (
     FLOWSEAL_BIN_FILES,
     FLOWSEAL_LIST_FILES,
@@ -450,7 +451,7 @@ class FlowsealStrategiesUpdater:
         for name in SYSTEM_FILES:
             url = f"{GITHUB_RAW_URL}/zapret/system/{name}"
             try:
-                remote = _http_get(url, timeout=20).decode("utf-8")
+                remote = fetch_bytes(url, timeout=20).decode("utf-8")
             except Exception as exc:
                 get_error_logger().error("Чтение %s из репозитория: %s", url, exc, exc_info=True)
                 continue

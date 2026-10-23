@@ -9,6 +9,7 @@ import urllib.error
 import urllib.request
 
 from core.app_logging import get_error_logger
+from core.github_fetch import fetch_bytes
 from core.sudo_helper import run_sudo, sudo_available
 from core.updater_base import BaseUpdater
 from core.manager_config import VERSION_CONFIG
@@ -655,8 +656,7 @@ def read_bundle_manifest(
     """Первая и вторая строки version.txt: версия и URL архива полного пакета."""
     url = version_url or VERSION_CONFIG["version_url"]
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:
-            content = response.read().decode("utf-8").strip()
+        content = fetch_bytes(url, timeout=timeout).decode("utf-8").strip()
         lines = content.split("\n")
         if len(lines) >= 2:
             ver = lines[0].strip()

@@ -1,8 +1,8 @@
 import re
-import urllib.request
 import urllib.error
 
 from core.app_logging import get_error_logger
+from core.github_fetch import FetchError, fetch_bytes
 
 
 class BaseUpdater:
@@ -18,8 +18,9 @@ class BaseUpdater:
         (в том числе когда обновлений нет); иначе текст причины.
         """
         try:
-            with urllib.request.urlopen(self.version_url, timeout=10) as response:
-                content = response.read().decode('utf-8').strip()
+            content = fetch_bytes(self.version_url, timeout=10).decode('utf-8').strip()
+        except FetchError as e:
+            return None, None, str(e)
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 return None, None, "манифест версии ещё не опубликован (HTTP 404)"

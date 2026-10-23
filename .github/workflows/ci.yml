@@ -42,5 +42,8 @@ jobs:
       - name: BB DPI conversion (ciadpi -> nfqws, dry-run)
         run: python tools/check_bbdpi_convert.py
 
+      - name: GitHub fetch chain (offline)
+        run: python tools/check_github_fetch.py
+
       - name: Lint (ruff)
         run: ruff check core ui tools main.py

@@ -20,10 +20,10 @@ import subprocess
 import tempfile
 import time
 import urllib.error
-import urllib.request
 from pathlib import Path
 
 from core.app_logging import get_error_logger
+from core.github_fetch import FetchError, fetch_to_file
 from core.service_manager import ServiceManager
 from core.sudo_helper import run_sudo, sudo_available
 
@@ -44,7 +44,6 @@ ARCH_MAP = {
 
 VERSION_RE = re.compile(r"version\s+(v[0-9][\w.\-]*)")
 BACKUP_PREFIX = "nfqws_backup_"
-USER_AGENT = "Zapret-DPI-Manager/2"
 
 
 def manager_dir() -> Path:
@@ -195,6 +194,8 @@ class NfqwsUpdater:
 
     @staticmethod
     def _error_text(exc: Exception) -> str:
+        if isinstance(exc, FetchError):
+            return str(exc)
         if isinstance(exc, urllib.error.HTTPError):
             if exc.code == 404:
                 return "движок nfqws не найден в источнике (HTTP 404)"
@@ -207,13 +208,7 @@ class NfqwsUpdater:
 
     @staticmethod
     def _download(url: str, dest: Path) -> None:
-        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        with urllib.request.urlopen(req, timeout=180) as response, open(dest, "wb") as out:
-            while True:
-                chunk = response.read(64 * 1024)
-                if not chunk:
-                    break
-                out.write(chunk)
+        fetch_to_file(url, dest, timeout=180)
         if not dest.exists() or dest.stat().st_size == 0:
             raise RuntimeError("скачанный движок пустой")
 
