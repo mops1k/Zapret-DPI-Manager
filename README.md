@@ -31,7 +31,12 @@
 ### Другие ОС
 Для работы вам понадобится sudo пароль. Его можно установить через консоль командой `passwd`
 
-1. Скачать архив установщика [install_zapret.tar.gz](https://github.com/mops1k/Zapret-DPI-Manager/raw/refs/heads/main/install_zapret.tar.gz)
+1. Скачать архив установщика [install_zapret.tar.gz](https://cdn.jsdelivr.net/gh/mops1k/Zapret-DPI-Manager@main/install_zapret.tar.gz)
+   Если зеркало не открывается, тот же файл берётся из архива репозитория (только хосты GitHub):
+   ```bash
+   curl -fsSL https://codeload.github.com/mops1k/Zapret-DPI-Manager/tar.gz/refs/heads/main -o /tmp/repo.tar.gz \
+     && tar -xzf /tmp/repo.tar.gz -O --wildcards '*/install_zapret.tar.gz' > install_zapret.tar.gz
+   ```
 2. Распаковать в удобном месте
 3. Запустить install_zapret.sh и следовать шагам установщика
 
@@ -68,6 +73,29 @@
   Zapret была запущена, она перезапускается, чтобы применились новые списки и payload'ы.
 - Если Flowseal добавит payload, плейсхолдера которого ещё нет в `starter.sh`, такая
   стратегия будет пропущена с пояснением в логе — для неё потребуется обновление приложения.
+
+### Если `raw.githubusercontent.com` недоступен
+
+В РФ `raw.githubusercontent.com` периодически не отвечает, хотя `github.com` открывается.
+Проверка обновлений и загрузка стратегий/движка не привязаны к этому хосту: файл скачивается
+цепочкой (`core/github_fetch.py`) — `raw` → `api.github.com` (сырой файл через GitHub API) →
+архив `codeload.github.com` → зеркало → последняя удачная копия из
+`~/.cache/zapret_dpi_manager/gh_cache`. Если не сработал ни один сетевой путь, обновление
+возьмёт прошлую удачную копию вместо ошибки.
+
+Установщик скачивается так же, без raw: ярлык `Zepret_Manager_V2_Install.desktop` берёт
+`install_zapret.tar.gz` из архива репозитория `codeload.github.com`, а при отказе — с зеркала
+jsDelivr; ссылка в разделе «Другие ОС» ведёт на jsDelivr, запасная команда через архив
+репозитория указана там же.
+
+Зеркало по умолчанию — `cdn.jsdelivr.net/gh/...`; переопределяется переменной окружения
+`ZAPRET_GH_MIRROR` при запуске менеджера:
+
+- `https://ghproxy.net/` — префиксное зеркало (префикс + raw-URL);
+- `https://<хост>/{owner}/{repo}/{ref}/{path}` — свой шаблон;
+- `off` — отключить зеркало, останутся только хосты GitHub и локальный кэш.
+
+Логику цепочки без обращения к сети проверяет `python3 tools/check_github_fetch.py`.
 
 ### Пароль sudo
 
