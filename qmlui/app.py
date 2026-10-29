@@ -734,8 +734,14 @@ def _run_selftest(app, engine, backend, theme, log) -> int:
         checks.append(("проверка соединения запускается",
                        backend.checkRunning and len(backend.checkLog) > 0))
         backend.stopConnectionCheck()
-        wait(900)
-        checks.append(("проверка соединения останавливается", not backend.checkRunning))
+        # Проверки соединения сетевые: в CI остановка иногда занимает секунды.
+        stopped = False
+        for _ in range(60):
+            wait(100)
+            if not backend.checkRunning:
+                stopped = True
+                break
+        checks.append(("проверка соединения останавливается", stopped))
         QTest.keyClick(window, Qt.Key_Escape)
         wait(500)
         checks.append(("возврат с проверки соединения", window.property("pageDepth") == 1))
