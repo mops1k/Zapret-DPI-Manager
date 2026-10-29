@@ -18,11 +18,17 @@ from core.sudo_helper import run_sudo
 DEFAULT_SUCCESS_CODES = {"200", "204", "301", "302", "303", "304", "307", "308"}
 
 # Цели, для которых «неуспешный» код на самом деле ожидаем.
+# 204 у YouTubeVideoRedirect и GoogleGstatic — маячки generate_204: корни
+# redirector.googlevideo.com и www.gstatic.com отдают 404, а curl идёт с -L,
+# поэтому ожидать 30x бессмысленно (финальный код — не 30x).
+# Decky_loader_official не поддерживает HEAD (405), GET отдаёт 200.
 EXPECTED_HTTP_CODES = {
     "generate_204": {"204"},
     "YouTube_API": {"404"},
     "DiscordUpdates": {"404"},
-    "YouTubeVideoRedirect": {"301", "302", "303", "307", "308"},
+    "YouTubeVideoRedirect": {"204"},
+    "GoogleGstatic": {"204"},
+    "Decky_loader_official": {"405"},
 }
 
 class StrategyTester:

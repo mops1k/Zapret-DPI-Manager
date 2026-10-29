@@ -2,7 +2,7 @@
 YouTubeWeb              = "https://www.youtube.com"
 YouTubeShort            = "https://youtu.be"
 YouTubeImage            = "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg"
-YouTubeVideoRedirect    = "https://redirector.googlevideo.com"
+YouTubeVideoRedirect    = "https://redirector.googlevideo.com/generate_204"
 YouTube_WatchPage       = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 YouTubeAvatar           = "https://yt3.ggpht.com/a/default-user"
 generate_204            = "https://www.google.com/generate_204"
@@ -11,7 +11,7 @@ YouTube_API             = "https://www.googleapis.com/youtube/v3/videos?id=dQw4w
 ### Discord
 DiscordMain             = "https://discord.com"
 DiscordGateway          = "https://discord.com/api/v9/gateway"
-DiscordCDN              = "https://cdn.discordapp.com"
+DiscordCDN              = "https://cdn.discordapp.com/embed/avatars/0.png"
 DiscordUpdates          = "https://updates.discord.com"
 
 ### Telegram
@@ -39,7 +39,7 @@ SteamGridDB             = "https://www.steamgriddb.com"
 
 ### Google
 GoogleMain              = "https://www.google.com"
-GoogleGstatic           = "https://www.gstatic.com"
+GoogleGstatic           = "https://www.gstatic.com/generate_204"
 
 ### Cloudflare
 CloudflareWeb           = "https://www.cloudflare.com"
