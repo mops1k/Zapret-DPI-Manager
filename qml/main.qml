@@ -23,7 +23,10 @@ ApplicationWindow {
     // Окно не должно вылезать за экран: подгоняем после создания окна,
     // когда привязанный Screen уже известен (на Steam Deck остаётся 1180x720).
     Component.onCompleted: {
-        if (Screen.width > 0) {
+        // В самопроверке размер не подгоняем: в CI экран offscreen маленький,
+        // и на узком окне часть панели скрывается — тест проверял бы не то.
+        const selftest = Qt.application.arguments.indexOf("--selftest") >= 0
+        if (!selftest && Screen.width > 0) {
             width = Math.min(width, Screen.width - 96)
             height = Math.min(height, Screen.height - 96)
         }

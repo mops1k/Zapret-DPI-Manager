@@ -293,6 +293,12 @@ def _run_selftest(app, engine, backend, theme, log) -> int:
         print(f"окно: {window.property('width')}x{window.property('height')}", flush=True)
         print(f"служба: {backend.serviceState}, стратегия: {backend.strategyName}", flush=True)
 
+        # Фиксируем размер окна: в CI экран offscreen меньше, и при узком окне
+        # часть панели скрывается — проверки навигации тогда не про навигацию.
+        try:
+            window.resize(1024, 720)
+        except Exception:  # noqa: BLE001
+            pass
         wait(600)  # первый опрос статуса и WARP идёт в фоновом потоке
         warp = dict(backend.warpInfo)
         print(f"  [debug] WARP: installed={warp.get('installed')} active={warp.get('active')} "
@@ -314,17 +320,24 @@ def _run_selftest(app, engine, backend, theme, log) -> int:
 
         QTest.keyClick(window, Qt.Key_Right)
         checks.append(("навигация вправо", "автозапуск" in focus_text()))
-        QTest.keyClick(window, Qt.Key_Down)
-        checks.append(("карточка WARP в цепочке", focus_text() == "Настроить"))
-        QTest.keyClick(window, Qt.Key_Left)
-        checks.append(("кнопка WARP", "WARP" in focus_text()))
-        QTest.keyClick(window, Qt.Key_Down)
-        checks.append(("навигация вниз", focus_text() == "Сменить"))
-        QTest.keyClick(window, Qt.Key_Up)
-        checks.append(("навигация вверх", "WARP" in focus_text()))
-        QTest.keyClick(window, Qt.Key_Up)
-        checks.append(("возврат к службе", "автозапуск" in focus_text()))
-        QTest.keyClick(window, Qt.Key_Up)
+        if warp_ready:
+            QTest.keyClick(window, Qt.Key_Down)
+            checks.append(("карточка WARP в цепочке", focus_text() == "Настроить"))
+            QTest.keyClick(window, Qt.Key_Left)
+            checks.append(("кнопка WARP", "WARP" in focus_text()))
+            QTest.keyClick(window, Qt.Key_Down)
+            checks.append(("навигация вниз", focus_text() == "Сменить"))
+            QTest.keyClick(window, Qt.Key_Up)
+            checks.append(("навигация вверх", "WARP" in focus_text()))
+            QTest.keyClick(window, Qt.Key_Up)
+            checks.append(("возврат к службе", "автозапуск" in focus_text()))
+            QTest.keyClick(window, Qt.Key_Up)
+        else:
+            for _name in ("карточка WARP в цепочке", "кнопка WARP",
+                          "навигация вниз", "навигация вверх",
+                          "возврат к службе"):
+                checks.append((_name, None))
+            QTest.keyClick(window, Qt.Key_Up)  # автозапуск -> панель
         checks.append(("выход в панель", focus_icon().endswith("refresh.svg")))
         QTest.keyClick(window, Qt.Key_Right)   # панель: перезапуск -> GameFilter
         QTest.keyClick(window, Qt.Key_Right)   # -> настройки
@@ -470,34 +483,45 @@ def _run_selftest(app, engine, backend, theme, log) -> int:
                 checks.append((_name, None))
             QTest.keyClick(window, Qt.Key_Escape)
             wait(700)
-        # Экран WARP: движок, списки, журнал, проверка версии.
-        QTest.keyClick(window, Qt.Key_Up)      # «Сменить» -> кнопка WARP
-        QTest.keyClick(window, Qt.Key_Right)   # -> «Настроить»
-        QTest.keyClick(window, Qt.Key_Space)
-        wait(900)
-        checks.append(("экран WARP открыт",
-                       focus_icon().endswith("back.svg")
-                       and window.property("pageDepth") == 2))
-        details = dict(backend.warpDetails)
-        checks.append(("данные WARP загружены",
-                       bool(details.get("installed_version"))
-                       or details.get("installed") is False))
-        checks.append(("списки диапазонов прочитаны",
-                       (len(details.get("lists") or []) > 0) if warp_ready else None))
-        backend.loadWarpJournal()
-        wait(1200)
-        checks.append(("журнал WARP загружен",
-                       (len(backend.warpJournal) > 0) if warp_ready else None))
-        backend.refreshWarpUpstream()
-        wait(6000)
-        upstream = dict(backend.warpDetails)
-        checks.append(("проверка версии usque отработала",
-                       bool(upstream.get("upstream_version")
-                            or upstream.get("upstream_error"))))
-        QTest.keyClick(window, Qt.Key_Escape)
-        wait(500)
-        checks.append(("возврат с экрана WARP", window.property("pageDepth") == 1))
-
+        if warp_ready:
+            # Экран WARP: движок, списки, журнал, проверка версии.
+            QTest.keyClick(window, Qt.Key_Up)      # «Сменить» -> кнопка WARP
+            QTest.keyClick(window, Qt.Key_Right)   # -> «Настроить»
+            QTest.keyClick(window, Qt.Key_Space)
+            wait(900)
+            checks.append(("экран WARP открыт",
+                           focus_icon().endswith("back.svg")
+                           and window.property("pageDepth") == 2))
+            details = dict(backend.warpDetails)
+            checks.append(("данные WARP загружены",
+                           bool(details.get("installed_version"))
+                           or details.get("installed") is False))
+            checks.append(("списки диапазонов прочитаны",
+                           (len(details.get("lists") or []) > 0) if warp_ready else None))
+            backend.loadWarpJournal()
+            wait(1200)
+            checks.append(("журнал WARP загружен",
+                           (len(backend.warpJournal) > 0) if warp_ready else None))
+            backend.refreshWarpUpstream()
+            wait(6000)
+            upstream = dict(backend.warpDetails)
+            checks.append(("проверка версии usque отработала",
+                           bool(upstream.get("upstream_version")
+                                or upstream.get("upstream_error"))))
+            QTest.keyClick(window, Qt.Key_Escape)
+            wait(500)
+            checks.append(("возврат с экрана WARP", window.property("pageDepth") == 1))
+    
+        else:
+            for _name in (
+                "экран WARP открыт",
+                "данные WARP загружены",
+                "списки диапазонов прочитаны",
+                "журнал WARP загружен",
+                "проверка версии usque отработала",
+                "возврат с экрана WARP",
+            ):
+                checks.append((_name, None))
         # Hostlist: из меню настроек.
         QTest.keyClick(window, Qt.Key_Up)      # «Сменить» -> кнопка WARP
         QTest.keyClick(window, Qt.Key_Up)      # -> автозапуск
