@@ -1,2 +1,2 @@
-2.12.3
+2.12.4
 https://github.com/mops1k/Zapret-DPI-Manager/releases/latest/download/zapret_updater.tar.gz

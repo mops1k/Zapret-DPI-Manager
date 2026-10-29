@@ -1102,8 +1102,12 @@ def read_update_versions() -> dict:
     }
 
 
-def run_update(kind: str, log) -> tuple[bool, str, str]:
-    """Обновление приложения, стратегий или движка (в фоновом потоке моста)."""
+def run_update(kind: str, log) -> tuple[bool, str, str, bool]:
+    """Обновление приложения, стратегий или движка (в фоновом потоке моста).
+
+    Четвёртый элемент — нужен ли перезапуск: только если приложение реально
+    заменило файлы («обновлений нет» перезапуска не требует).
+    """
     kind = (kind or "").strip().lower()
     if kind == "app":
         from core.zapret_updater import ZapretBundleUpdater
@@ -1112,12 +1116,12 @@ def run_update(kind: str, log) -> tuple[bool, str, str]:
         version, info, error = updater.check_for_updates_detailed()
         current = str(VERSION_CONFIG.get("current_version") or "")
         if error:
-            return False, f"Не удалось проверить обновление: {error}", "error"
+            return False, f"Не удалось проверить обновление: {error}", "error", False
         if not version or version == current:
-            return True, f"Установлена последняя версия {current}", "success"
+            return True, f"Установлена последняя версия {current}", "success", False
         url = (info or {}).get("download_url") or (info or {}).get("url") or ""
         if not url:
-            return False, f"Для версии {version} не найден адрес архива", "error"
+            return False, f"Для версии {version} не найден адрес архива", "error", False
         log(f"Скачивание {version}…")
 
         def progress(text: str, percent=None) -> None:
@@ -1128,8 +1132,8 @@ def run_update(kind: str, log) -> tuple[bool, str, str]:
 
         ok = updater.update_bundle(url, None, progress_callback=progress)
         if ok:
-            return True, f"Приложение обновлено до {version}. Перезапустите менеджер.", "success"
-        return False, "Обновление приложения не удалось (см. журнал)", "error"
+            return True, f"Приложение обновлено до {version}. Менеджер перезапустится.", "success", True
+        return False, "Обновление приложения не удалось (см. журнал)", "error", False
 
     if kind == "strategies":
         from core.strategies_updater import FlowsealStrategiesUpdater
@@ -1137,9 +1141,9 @@ def run_update(kind: str, log) -> tuple[bool, str, str]:
         updater = FlowsealStrategiesUpdater(progress_callback=lambda text, *a: log(str(text)))
         result = updater.update(apply=True)
         if isinstance(result, dict) and result.get("updated"):
-            return True, "Стратегии обновлены из Flowseal", "success"
+            return True, "Стратегии обновлены из Flowseal", "success", False
         detail = (result or {}).get("message") if isinstance(result, dict) else ""
-        return True, detail or "Стратегии уже актуальны", "success"
+        return True, detail or "Стратегии уже актуальны", "success", False
 
     if kind == "engine":
         from core.engine_updater import NfqwsUpdater
@@ -1147,13 +1151,13 @@ def run_update(kind: str, log) -> tuple[bool, str, str]:
         updater = NfqwsUpdater(progress_callback=lambda text, *a: log(str(text)))
         result = updater.update(apply=True)
         if isinstance(result, dict) and result.get("error"):
-            return False, str(result.get("error")), "error"
+            return False, str(result.get("error")), "error", False
         if isinstance(result, dict) and result.get("updated"):
-            return True, "Движок nfqws обновлён", "success"
+            return True, "Движок nfqws обновлён", "success", False
         detail = (result or {}).get("message") if isinstance(result, dict) else ""
-        return True, detail or "Движок уже актуален", "success"
+        return True, detail or "Движок уже актуален", "success", False
 
-    return False, f"Неизвестный тип обновления: {kind}", "error"
+    return False, f"Неизвестный тип обновления: {kind}", "error", False
 
 
 def read_unlock_state() -> dict:
@@ -1551,6 +1555,7 @@ class Backend(QObject):
         self._update_log: list[dict] = []
         self._update_running = False
         self._last_update_kind = ""
+        self._restart_pending = False
         self._update_available = False
         self._update_version = ""
         self._update_notes = ""
@@ -2196,10 +2201,11 @@ class Backend(QObject):
             self._updateLineReady.emit(str(text))
 
         try:
-            ok, message, level = run_update(kind, log)
+            ok, message, level, restart_needed = run_update(kind, log)
         except Exception as exc:  # noqa: BLE001
             self._log.exception("Ошибка обновления")
-            ok, message, level = False, f"Ошибка обновления: {exc}", "error"
+            ok, message, level, restart_needed = False, f"Ошибка обновления: {exc}", "error", False
+        self._restart_pending = bool(restart_needed)
         self._update_running = False
         self._updateFinished.emit(ok, message, level)
 
@@ -2246,8 +2252,8 @@ class Backend(QObject):
         self.updateStateChanged.emit()
         self._set_message(message, level)
         self.refreshUpdateVersions()
-        if ok and self._last_update_kind == "app":
-            # Как в Tk-версии: после установки обновления менеджер перезапускается сам.
+        if ok and self._restart_pending and self._last_update_kind == "app":
+            # Как в Tk-версии: перезапуск только после реально применённого обновления.
             self.restartRequested.emit()
 
     @Property("QVariantList", notify=testerLogChanged)
