@@ -1198,7 +1198,6 @@ def _unlock_category_label(category: str) -> str:
 
 def apply_unlock(selected_ids, log=None) -> tuple[bool, str, str]:
     """Записывает выбранные категории в /etc/hosts (marker-блок, бэкап, атомарно)."""
-    import shutil
     import tempfile
     import time
 
