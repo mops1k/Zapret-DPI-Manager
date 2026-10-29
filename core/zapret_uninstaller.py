@@ -5,11 +5,8 @@ import shutil
 import subprocess
 import sys
 import time
-import tkinter as tk
 from collections.abc import Callable
-from tkinter import messagebox
 
-from core.dpi_utils import place_toplevel_centered_on_parent
 from core.platform_info import (
     is_valve_steamos,
     distro_log_label,
@@ -21,6 +18,7 @@ from core.platform_info import (
     ZAPRET_SYSTEMD_UNIT_PATH_LEGACY,
     zapret_systemd_unit_is_present,
 )
+from core.dialog_port import dialog_port
 from core.sudo_helper import run_sudo, sudo_available
 
 class ZapretUninstaller:
@@ -36,6 +34,7 @@ class ZapretUninstaller:
         self._ask_yesno_fn = ask_yesno_fn
         self.sudo_password = None
         self.progress_window = None
+        self.progress_handle = None
         self.current_task = ""
         self.debug_log = []
         self.is_steamos = self.check_if_steamos()
@@ -61,13 +60,8 @@ class ZapretUninstaller:
         self.log_debug(f"show_info: {title} - {message}")
         if self._show_info_fn is not None:
             self._show_info_fn(title, message)
-        elif self.root and self.root.winfo_exists():
-            try:
-                messagebox.showinfo(title, message, parent=self.root)
-            except Exception:
-                print(f"{title}: {message}")
         else:
-            print(f"{title}: {message}")
+            dialog_port().show_info(str(title), str(message))
 
         if title == "Удаление завершено" and self.uninstall_successful:
             self.log_debug("Закрытие программы после успешного удаления...")
@@ -81,120 +75,25 @@ class ZapretUninstaller:
         self.log_debug(f"show_yesno_dialog: {title}")
         if self._ask_yesno_fn is not None:
             return self._ask_yesno_fn(title, message)
-        if self.root and self.root.winfo_exists():
-            try:
-                return bool(messagebox.askyesno(title, message, parent=self.root))
-            except Exception:
-                return False
-        return False
+        return bool(dialog_port().ask_yes_no(str(title), str(message)))
 
-    def create_progress_window(self, title="Удаление Zapret"):
-        """Создает окно прогресса"""
-        if not self.root:
-            self.log_debug("Нет root окна для создания прогресса")
-            return None
-
-        self.log_debug(f"Создание окна прогресса: {title}")
-        try:
-            progress_window = tk.Toplevel(self.root)
-            progress_window.title(title)
-            progress_window.configure(bg='#182030')
-            progress_window.resizable(False, False)
-            progress_window.transient(self.root)
-
-            # Основной фрейм
-            main_frame = tk.Frame(progress_window, bg='#182030', padx=30, pady=25)
-            main_frame.pack(fill=tk.BOTH, expand=True)
-
-            # Заголовок
-            title_label = tk.Label(
-                main_frame,
-                text=title,
-                font=("Arial", 14, "bold"),
-                fg='#ff3b30',  # Красный цвет для удаления
-                bg='#182030'
-            )
-            title_label.pack(pady=(0, 15))
-
-            # Текущая задача
-            self.task_label = tk.Label(
-                main_frame,
-                text="Подготовка к удалению...",
-                font=("Arial", 11),
-                fg='white',
-                bg='#182030',
-                wraplength=340
-            )
-            self.task_label.pack(pady=(0, 10))
-
-            # Прогресс-бар
-            progress_frame = tk.Frame(main_frame, bg='#182030')
-            progress_frame.pack(fill=tk.X, pady=(10, 0))
-
-            # Фон прогресс-бара
-            self.progress_bg = tk.Frame(
-                progress_frame,
-                bg='#15354D',
-                height=12,
-                relief=tk.FLAT
-            )
-            self.progress_bg.pack(fill=tk.X)
-
-            # Сам прогресс-бар
-            self.progress_bar = tk.Frame(
-                self.progress_bg,
-                bg='#ff3b30',  # Красный цвет для удаления
-                height=12,
-                width=0
-            )
-            self.progress_bar.place(x=0, y=0, relheight=1.0)
-
-            # Процент выполнения
-            self.percent_label = tk.Label(
-                progress_frame,
-                text="0%",
-                font=("Arial", 10),
-                fg='#AAAAAA',
-                bg='#182030'
-            )
-            self.percent_label.pack(pady=(5, 0))
-
-            progress_window.update_idletasks()
-            place_toplevel_centered_on_parent(
-                progress_window, self.root, min_width=340, min_height=140, margin_width=8, margin_height=10
-            )
-            progress_window.update()
-            self.log_debug("Окно прогресса создано успешно")
-            return progress_window
-
-        except Exception as e:
-            self.log_debug(f"Ошибка создания окна прогресса: {e}")
-            return None
+    def create_progress_window(self, title="Прогресс"):
+        """Окно прогресса создаёт порт диалогов (Tk — в ui, Qt — в qmlui)."""
+        self.progress_handle = dialog_port().open_progress(title)
+        return self.progress_handle
 
     def update_progress(self, task, progress_percent):
-        """Обновляет прогресс-бар и текст задачи"""
-        if self.progress_window and self.progress_window.winfo_exists():
-            self.log_debug(f"Обновление прогресса: {task} - {progress_percent}%")
-            self.task_label.config(text=task)
-
-            width = self.progress_bg.winfo_width()
-            new_width = int(width * progress_percent / 100)
-            self.progress_bar.config(width=new_width)
-
-            self.percent_label.config(text=f"{int(progress_percent)}%")
-            self.progress_window.update()
-        else:
-            self.log_debug(f"Невозможно обновить прогресс: окно не существует")
+        """Обновляет прогресс через порт диалогов."""
+        handle = getattr(self, "progress_handle", None)
+        if handle is not None:
+            handle.update(str(task), progress_percent)
 
     def close_progress_window(self):
-        """Закрывает окно прогресса"""
-        if self.progress_window and self.progress_window.winfo_exists():
-            self.log_debug("Закрытие окна прогресса")
-            self.progress_window.destroy()
-            self.progress_window = None
-        else:
-            self.log_debug("Окно прогресса уже закрыто")
-
+        """Закрывает прогресс, если он открыт."""
+        handle = getattr(self, "progress_handle", None)
+        if handle is not None:
+            handle.close()
+            self.progress_handle = None
     def get_sudo_password(self):
         """Совместимость: пароль вводит системный askpass при каждом `sudo -A`."""
         self.log_debug("Проверка доступности sudo -A (askpass)...")
@@ -793,7 +692,7 @@ def run_zapret_uninstall(
     """
     Запускает удаление zapret.
 
-    Для кастомных диалогов используйте ui.integrations.zapret_uninstall.run_zapret_uninstall.
+    Диалоги и прогресс идут через core.dialog_port.
     """
     uninstaller = ZapretUninstaller(
         root_window,
@@ -803,10 +702,7 @@ def run_zapret_uninstall(
     return uninstaller.run_uninstall()
 
 if __name__ == "__main__":
-    # Тестирование
-    import tkinter as tk
-    root = tk.Tk()
-    root.withdraw()
-    uninstaller = ZapretUninstaller(root)
+    # Тестирование без GUI: диалоги и прогресс идут через консольный порт.
+    uninstaller = ZapretUninstaller(None)
     result = uninstaller.run_uninstall()
     print(f"Результат удаления: {result}")

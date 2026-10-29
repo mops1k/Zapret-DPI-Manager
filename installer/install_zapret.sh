@@ -146,7 +146,7 @@ detect_system_type() {
         PKG_MANAGER="pacman"
         PKG_UPDATE="pacman -Sy"
         PKG_INSTALL="pacman -S --noconfirm"
-        TKINTER_PKG="tk"
+        QML_PKGS="pyside6 qt6-declarative"
         echo "Обнаружена Valve SteamOS (ID=steamos, pacman)"
 
     elif command -v pacman &> /dev/null; then
@@ -154,7 +154,7 @@ detect_system_type() {
         PKG_MANAGER="pacman"
         PKG_UPDATE="pacman -Sy"
         PKG_INSTALL="pacman -S --noconfirm"
-        TKINTER_PKG="tk"
+        QML_PKGS="pyside6 qt6-declarative"
         echo "Обнаружена Arch Linux система (pacman)"
 
     elif [ -f /run/ostree-booted ] && command -v rpm-ostree &> /dev/null; then
@@ -162,7 +162,7 @@ detect_system_type() {
         PKG_MANAGER="rpm-ostree"
         PKG_UPDATE=""  # rpm-ostree не требует обновления
         PKG_INSTALL="rpm-ostree install"
-        TKINTER_PKG="python3-tkinter"
+        QML_PKGS="python3-pyside6 qt6-qtdeclarative"
         echo "Обнаружена ostree+rpm-ostree система (Bazzite, Fedora Atomic и т.д.)"
 
     elif command -v apt &> /dev/null; then
@@ -170,7 +170,7 @@ detect_system_type() {
         PKG_MANAGER="apt"
         PKG_UPDATE="apt update -qq"
         PKG_INSTALL="apt install -y"
-        TKINTER_PKG="python3-tk"
+        QML_PKGS="python3-pyside6.qml qml6-module-qtquick-controls qml6-module-qtquick-layouts qml6-module-qtquick-effects"
         echo "Обнаружена Debian/Ubuntu система (apt)"
 
     elif command -v dnf &> /dev/null; then
@@ -178,7 +178,7 @@ detect_system_type() {
         PKG_MANAGER="dnf"
         PKG_UPDATE="dnf check-update"
         PKG_INSTALL="dnf install -y"
-        TKINTER_PKG="python3-tkinter"
+        QML_PKGS="python3-pyside6 qt6-qtdeclarative"
         echo "Обнаружена Fedora/RHEL система (dnf)"
 
     elif command -v yum &> /dev/null; then
@@ -186,7 +186,7 @@ detect_system_type() {
         PKG_MANAGER="yum"
         PKG_UPDATE="yum check-update"
         PKG_INSTALL="yum install -y"
-        TKINTER_PKG="python3-tkinter"
+        QML_PKGS="python3-pyside6 qt6-qtdeclarative"
         echo "Обнаружена CentOS/RHEL система (yum)"
 
     elif command -v zypper &> /dev/null; then
@@ -194,7 +194,7 @@ detect_system_type() {
         PKG_MANAGER="zypper"
         PKG_UPDATE="zypper refresh"
         PKG_INSTALL="zypper install -y"
-        TKINTER_PKG="python3-tkinter"
+        QML_PKGS="python3-pyside6 qt6-qtdeclarative"
         echo "Обнаружена openSUSE система (zypper)"
 
     else
@@ -202,7 +202,7 @@ detect_system_type() {
         PKG_MANAGER="unknown"
         PKG_UPDATE=""
         PKG_INSTALL=""
-        TKINTER_PKG=""
+        QML_PKGS=""
         echo "Не удалось определить тип системы"
         return 1
     fi
@@ -210,8 +210,8 @@ detect_system_type() {
     return 0
 }
 
-# === ФУНКЦИЯ: Установка tkinter с отображением прогресса ===
-install_tkinter_with_progress() {
+# === ФУНКЦИЯ: Установка PySide6 (QML) с отображением прогресса ===
+install_pyside6_with_progress() {
     local temp_password="$1"
 
     # Создаем временный скрипт для установки с прогрессом
@@ -227,13 +227,13 @@ run_sudo() {
 }
 
 echo "10"
-echo "# Подготовка к установке tkinter..."
+echo "# Подготовка к установке PySide6 и QML..."
 
 SYSTEM_TYPE="$SYSTEM_TYPE"
 PKG_MANAGER="$PKG_MANAGER"
 PKG_UPDATE="$PKG_UPDATE"
 PKG_INSTALL="$PKG_INSTALL"
-TKINTER_PKG="$TKINTER_PKG"
+QML_PKGS="$QML_PKGS"
 
 echo "20"
 echo "# Определен тип системы: \$SYSTEM_TYPE"
@@ -241,40 +241,40 @@ echo "# Определен тип системы: \$SYSTEM_TYPE"
 # Особый случай для rpm-ostree (иммутабельные системы)
 if [ "\$SYSTEM_TYPE" = "immutable" ]; then
     echo "30"
-    echo "# Установка tkinter в слой системы rpm-ostree..."
+    echo "# Установка PySide6 в слой системы rpm-ostree..."
     
     # Проверяем, не установлен ли уже пакет (опционально)
-    if run_sudo rpm -q \$TKINTER_PKG &>/dev/null; then
+    if run_sudo rpm -q \$QML_PKGS &>/dev/null; then
         echo "80"
-        echo "# Пакет \$TKINTER_PKG уже установлен"
+        echo "# Пакет \$QML_PKGS уже установлен"
         echo "100"
         echo "# Готово"
         exit 0
     fi
     
     echo "50"
-    echo "# Выполнение: rpm-ostree install \$TKINTER_PKG"
-    echo "# Установка пакета \$TKINTER_PKG (займет некоторое время)..."
+    echo "# Выполнение: rpm-ostree install \$QML_PKGS"
+    echo "# Установка пакета \$QML_PKGS (займет некоторое время)..."
     
     # Выполняем установку через rpm-ostree
-    if run_sudo rpm-ostree install \$TKINTER_PKG; then
+    if run_sudo rpm-ostree install \$QML_PKGS; then
         echo "90"
-        echo "# Пакет \$TKINTER_PKG добавлен в следующий слой системы"
-        echo "# После перезагрузки tkinter станет доступен"
+        echo "# Пакет \$QML_PKGS добавлен в следующий слой системы"
+        echo "# После перезагрузки PySide6 станет доступен"
         echo "100"
         echo "# Установка завершена. ТРЕБУЕТСЯ ПЕРЕЗАГРУЗКА!"
         
         # Устанавливаем флаг перезагрузки
-        echo "REBOOT_REQUIRED=true" > /tmp/zapret_tkinter_reboot
+        echo "REBOOT_REQUIRED=true" > /tmp/zapret_pyside6_reboot
         exit 0
     else
         # Проверяем, может пакет уже был в очереди
-        if run_sudo rpm-ostree status | grep -q "Pending" && run_sudo rpm-ostree status | grep -q "\$TKINTER_PKG" 2>/dev/null; then
+        if run_sudo rpm-ostree status | grep -q "Pending" && run_sudo rpm-ostree status | grep -q "\$QML_PKGS" 2>/dev/null; then
             echo "90"
-            echo "# Пакет \$TKINTER_PKG уже ожидает установки после перезагрузки"
+            echo "# Пакет \$QML_PKGS уже ожидает установки после перезагрузки"
             echo "100"
             echo "# ТРЕБУЕТСЯ ПЕРЕЗАГРУЗКА!"
-            echo "REBOOT_REQUIRED=true" > /tmp/zapret_tkinter_reboot
+            echo "REBOOT_REQUIRED=true" > /tmp/zapret_pyside6_reboot
             exit 0
         else
             echo "ERROR: Ошибка установки через rpm-ostree" >&2
@@ -291,22 +291,22 @@ if [ -n "\$PKG_UPDATE" ]; then
 fi
 
 echo "50"
-echo "# Установка пакета \$TKINTER_PKG..."
-if run_sudo \$PKG_INSTALL \$TKINTER_PKG; then
+echo "# Установка пакета \$QML_PKGS..."
+if run_sudo \$PKG_INSTALL \$QML_PKGS; then
     echo "80"
-    echo "# Пакет успешно установлен"
+    echo "# Пакеты успешно установлены"
 else
     echo "ERROR: Ошибка установки через \$PKG_MANAGER" >&2
     exit 1
 fi
 
 echo "90"
-echo "# Проверка установки tkinter..."
+echo "# Проверка установки PySide6 и QML..."
 
 # Для обычных систем проверяем import
-if python3 -c "import tkinter" 2>/dev/null; then
+if python3 -c "import PySide6.QtQml, PySide6.QtQuick, PySide6.QtQuickControls2" 2>/dev/null; then
     echo "100"
-    echo "# tkinter успешно установлен!"
+    echo "# PySide6 и QML успешно установлены!"
     exit 0
 else
     # Если не импортируется, но установка прошла - возможно нужен рестарт
@@ -323,7 +323,7 @@ EOF
     # Запускаем установку с отображением прогресса
     if [ "$USE_ZENITY" = true ] && [ "$ZENITY_INSTALLED" = true ]; then
         bash "$temp_script" "$temp_password" 2>&1 | \
-        show_progress "Установка tkinter" "Установка компонентов GUI..."
+        show_progress "Установка PySide6" "Установка компонентов GUI..."
 
         local pipestatus=${PIPESTATUS[0]}
         rm -f "$temp_script"
@@ -349,15 +349,57 @@ EOF
     fi
 }
 
-# === ФУНКЦИЯ: Проверка и установка tkinter ===
-install_tkinter_if_needed() {
-    echo "Проверка наличия tkinter (GUI Python)..."
+# === ФУНКЦИЯ: Проверка базовых зависимостей (python3, sudo, systemd, nft/iptables, wget/curl) ===
+ensure_base_dependencies() {
+    echo "Проверка базовых зависимостей..."
 
-    # На SteamOS не проверяем и не ставим tkinter
-    if is_valve_steamos; then
-        echo "Valve SteamOS: проверка tkinter пропущена"
+    local missing=()
+    command -v python3 >/dev/null 2>&1 || missing+=("python3")
+    command -v sudo >/dev/null 2>&1 || missing+=("sudo")
+    command -v systemctl >/dev/null 2>&1 || missing+=("systemd")
+    if ! command -v nft >/dev/null 2>&1 && ! command -v iptables >/dev/null 2>&1; then
+        missing+=("nftables")
+    fi
+    command -v wget >/dev/null 2>&1 || missing+=("wget")
+    command -v curl >/dev/null 2>&1 || missing+=("curl")
+
+    if [ "${#missing[@]}" -eq 0 ]; then
+        echo "Базовые зависимости на месте"
         return 0
     fi
+
+    echo "Не хватает: ${missing[*]}"
+    if [ -z "$PKG_INSTALL" ]; then
+        echo "Не удалось определить пакетный менеджер — установите вручную: ${missing[*]}" >&2
+        return 1
+    fi
+
+    if [ -z "$SUDO_PASSWORD" ]; then
+        if [ "$USE_ZENITY" = true ] && [ "$ZENITY_INSTALLED" = true ]; then
+            SUDO_PASSWORD=$(get_password "Требуются права администратора" "Введите пароль для установки зависимостей:" 2>/dev/null || true)
+        else
+            echo "Введите ваш пароль sudo для установки зависимостей:"
+            read -s SUDO_PASSWORD
+            echo ""
+        fi
+    fi
+    if [ -z "$SUDO_PASSWORD" ]; then
+        echo "Пароль не введён — установка зависимостей пропущена" >&2
+        return 1
+    fi
+
+    if echo "$SUDO_PASSWORD" | sudo -S $PKG_UPDATE >/dev/null 2>&1 || true; then :; fi
+    if echo "$SUDO_PASSWORD" | sudo -S $PKG_INSTALL "${missing[@]}" 2>/dev/null; then
+        echo "Зависимости установлены: ${missing[*]}"
+        return 0
+    fi
+    echo "Не удалось установить: ${missing[*]}" >&2
+    return 1
+}
+
+# === ФУНКЦИЯ: Проверка и установка PySide6 (QML) ===
+install_pyside6_if_needed() {
+    echo "Проверка наличия PySide6 и QML (GUI Python)..."
 
     # Определяем тип системы, если еще не определен
     if [ -z "$SYSTEM_TYPE" ]; then
@@ -366,23 +408,23 @@ install_tkinter_if_needed() {
 
     # Для rpm-ostree систем не проверяем import, просто проверяем наличие пакета
     if [ "$SYSTEM_TYPE" = "immutable" ]; then
-        if rpm -q "$TKINTER_PKG" &>/dev/null; then
-            echo "Пакет $TKINTER_PKG уже установлен в системе"
+        if rpm -q "$QML_PKGS" &>/dev/null; then
+            echo "Пакет $QML_PKGS уже установлен в системе"
             return 0
         else
-            echo "Пакет $TKINTER_PKG не найден, требуется установка"
+            echo "Пакет $QML_PKGS не найден, требуется установка"
         fi
     else
         # Для обычных систем проверяем import
-        if python3 -c "import tkinter" 2>/dev/null; then
-            echo "tkinter найден"
+        if python3 -c "import PySide6.QtQml, PySide6.QtQuick, PySide6.QtQuickControls2" 2>/dev/null; then
+            echo "PySide6 найден"
             return 0
         fi
     fi
 
     # Определяем тип системы
     if ! detect_system_type; then
-        local manual_text="Не удалось определить тип системы.\n\nУстановите tkinter вручную:\n• Debian/Ubuntu: sudo apt install python3-tk\n• Fedora: sudo dnf install python3-tkinter\n• Arch: sudo pacman -S tk\n• openSUSE: sudo zypper install python3-tkinter\n• Bazzite/Fedora Silverblue: sudo rpm-ostree install python3-tkinter\n\nЗатем снова запустите скрипт установки."
+        local manual_text="Не удалось определить тип системы.\n\nУстановите PySide6 и QML-модули вручную:\n• Debian/Ubuntu: sudo apt install python3-pyside6.qml qml6-module-qtquick-controls qml6-module-qtquick-layouts qml6-module-qtquick-effects\n• Fedora: sudo dnf install python3-pyside6 qt6-qtdeclarative\n• Arch/SteamOS: sudo pacman -S pyside6 qt6-declarative\n• openSUSE: sudo zypper install python3-pyside6\n• Bazzite/Fedora Silverblue: sudo rpm-ostree install python3-pyside6 qt6-qtdeclarative\n\nЗатем снова запустите скрипт установки."
 
         if [ "$USE_ZENITY" = true ] && [ "$ZENITY_INSTALLED" = true ]; then
             # Для Zenity используем printf для форматирования
@@ -398,16 +440,16 @@ install_tkinter_if_needed() {
     fi
 
     # Показываем сообщение о необходимости установки
-    local install_message="Для графического интерфейса Zapret DPI Manager требуется модуль tkinter (Python).\n\n"
+    local install_message="Для графического интерфейса Zapret DPI Manager требуются PySide6 и QML-модули Qt (Python).\n\n"
     install_message+="Обнаружена система: $SYSTEM_TYPE\n"
     install_message+="Пакетный менеджер: $PKG_MANAGER\n"
-    install_message+="Пакет для установки: $TKINTER_PKG\n\n"
+    install_message+="Пакет для установки: $QML_PKGS\n\n"
     install_message+="Сейчас будет выполнена автоматическая установка."
 
     if [ "$USE_ZENITY" = true ] && [ "$ZENITY_INSTALLED" = true ]; then
         local formatted_msg
         formatted_msg=$(printf "%b" "$install_message")
-        zenity --info --title="Установка tkinter" --text="$formatted_msg" --no-markup --width=400 2>/dev/null || true
+        zenity --info --title="Установка PySide6" --text="$formatted_msg" --no-markup --width=400 2>/dev/null || true
     else
         echo -e "$install_message"
     fi
@@ -417,94 +459,114 @@ install_tkinter_if_needed() {
     if [ -z "$temp_password" ]; then
         if [ "$USE_ZENITY" = true ] && [ "$ZENITY_INSTALLED" = true ]; then
             SUDO_PASSWORD=$(get_password "Требуются права администратора" \
-                "Введите пароль для установки tkinter:")
+                "Введите пароль для установки PySide6:")
             temp_password="$SUDO_PASSWORD"
             if [ -z "$temp_password" ]; then
-                local cancel_msg="Пароль не введён. Установка tkinter пропущена.\nУстановите пакет вручную и при необходимости перезапустите установку."
+                local cancel_msg="Пароль не введён. Установка PySide6 пропущена.\nУстановите пакет вручную и при необходимости перезапустите установку."
                 local formatted_cancel
                 formatted_cancel=$(printf "%b" "$cancel_msg")
                 zenity --info --title="Пропуск" --text="$formatted_cancel" --no-markup --width=400 2>/dev/null || true
                 return 1
             fi
             if ! echo "$temp_password" | sudo -S true 2>/dev/null; then
-                zenity --error --title="Ошибка" --text="Неверный пароль. Установка tkinter пропущена." --no-markup --width=400 2>/dev/null || true
+                zenity --error --title="Ошибка" --text="Неверный пароль. Установка PySide6 пропущена." --no-markup --width=400 2>/dev/null || true
                 return 1
             fi
         else
-            echo "Для установки tkinter требуются права администратора"
+            echo "Для установки PySide6 требуются права администратора"
             echo "Введите ваш пароль sudo:"
             read -s temp_password
             echo ""
             if [ -z "$temp_password" ]; then
-                echo "Пароль не введен. Пропускаем установку tkinter."
+                echo "Пароль не введен. Пропускаем установку PySide6."
                 return 1
             fi
             if ! echo "$temp_password" | sudo -S true 2>/dev/null; then
-                echo "Неверный пароль. Пропускаем установку tkinter."
+                echo "Неверный пароль. Пропускаем установку PySide6."
                 return 1
             fi
             SUDO_PASSWORD="$temp_password"
         fi
     fi
 
-    # Устанавливаем tkinter
+    # Устанавливаем PySide6
+    # SteamOS: /usr только для чтения — разблокируем ФС на время установки пакетов.
+    STEAMOS_UNLOCKED=false
+    if is_valve_steamos; then
+        if echo "$temp_password" | sudo -S steamos-readonly disable 2>/dev/null; then
+            STEAMOS_UNLOCKED=true
+            echo "SteamOS: файловая система разблокирована для установки PySide6"
+        fi
+    fi
     if [ "$USE_ZENITY" = true ] && [ "$ZENITY_INSTALLED" = true ]; then
-        if install_tkinter_with_progress "$temp_password"; then
+        if install_pyside6_with_progress "$temp_password"; then
             # Проверяем флаг перезагрузки для rpm-ostree
-            if [ -f /tmp/zapret_tkinter_reboot ]; then
+            if [ -f /tmp/zapret_pyside6_reboot ]; then
                 REBOOT_REQUIRED=true
-                rm -f /tmp/zapret_tkinter_reboot
+                rm -f /tmp/zapret_pyside6_reboot
 
                 # Сразу показываем сообщение о перезагрузке
                 zenity --info \
                     --title="⚠️ Требуется перезагрузка" \
-                    --text="Пакет tkinter добавлен в систему.\n\nПосле завершения установки Zapret DPI Manager НЕ ЗАБУДЬТЕ ПЕРЕЗАГРУЗИТЬ СИСТЕМУ, иначе программа не сможет запуститься." \
+                    --text="PySide6 добавлен в систему.\n\nПосле завершения установки Zapret DPI Manager НЕ ЗАБУДЬТЕ ПЕРЕЗАГРУЗИТЬ СИСТЕМУ, иначе программа не сможет запуститься." \
                     --width=450 \
                     2>/dev/null
             fi
+            if [ "$STEAMOS_UNLOCKED" = true ]; then
+                echo "$temp_password" | sudo -S steamos-readonly enable 2>/dev/null || true
+            fi
             return 0
         else
-            local error_text="Не удалось установить tkinter автоматически.\n\n"
+            local error_text="Не удалось установить PySide6 автоматически.\n\n"
             error_text+="Тип системы: $SYSTEM_TYPE\n"
             error_text+="Попробуйте установить вручную:\n"
-            error_text+="sudo $PKG_INSTALL $TKINTER_PKG"
+            error_text+="sudo $PKG_INSTALL $QML_PKGS"
 
             local formatted_error
             formatted_error=$(printf "%b" "$error_text")
-            zenity --error --title="Ошибка установки tkinter" --text="$formatted_error" --no-markup --width=400 2>/dev/null || true
+            zenity --error --title="Ошибка установки PySide6" --text="$formatted_error" --no-markup --width=400 2>/dev/null || true
+            if [ "$STEAMOS_UNLOCKED" = true ]; then
+                echo "$temp_password" | sudo -S steamos-readonly enable 2>/dev/null || true
+            fi
             return 1
         fi
     else
         # Консольный режим
-        echo "Установка tkinter через $PKG_MANAGER..."
+        echo "Установка PySide6 через $PKG_MANAGER..."
 
         if [ -n "$PKG_UPDATE" ]; then
             echo "Обновление репозиториев..."
             echo "$temp_password" | sudo -S $PKG_UPDATE 2>/dev/null || true
         fi
 
-        echo "Установка пакета $TKINTER_PKG..."
-        if echo "$temp_password" | sudo -S $PKG_INSTALL $TKINTER_PKG 2>/dev/null; then
+        echo "Установка пакета $QML_PKGS..."
+        if echo "$temp_password" | sudo -S $PKG_INSTALL $QML_PKGS 2>/dev/null; then
             # Проверяем флаг перезагрузки для rpm-ostree
-            if [ -f /tmp/zapret_tkinter_reboot ]; then
+            if [ -f /tmp/zapret_pyside6_reboot ]; then
                 REBOOT_REQUIRED=true
-                rm -f /tmp/zapret_tkinter_reboot
+                rm -f /tmp/zapret_pyside6_reboot
 
                 echo ""
-                echo "⚠️  ВНИМАНИЕ: Для завершения установки tkinter"
+                echo "⚠️  ВНИМАНИЕ: Для завершения установки PySide6"
                 echo "   потребуется перезагрузка системы!"
                 echo ""
                 sleep 3
             fi
-            echo "tkinter успешно установлен"
+            echo "PySide6 успешно установлен"
+            if [ "$STEAMOS_UNLOCKED" = true ]; then
+                echo "$temp_password" | sudo -S steamos-readonly enable 2>/dev/null || true
+            fi
             return 0
         else
-            echo "Ошибка установки tkinter"
+            echo "Ошибка установки PySide6"
             echo "Попробуйте установить вручную:"
-            echo "sudo $PKG_INSTALL $TKINTER_PKG"
+            echo "sudo $PKG_INSTALL $QML_PKGS"
             echo ""
             echo "Нажмите Enter для продолжения..."
             read
+            if [ "$STEAMOS_UNLOCKED" = true ]; then
+                echo "$temp_password" | sudo -S steamos-readonly enable 2>/dev/null || true
+            fi
             return 1
         fi
     fi
@@ -873,8 +935,11 @@ echo "Домашняя директория: $CURRENT_HOME"
 # Пытаемся установить zenity если нет (необязательный шаг — установку не прерываем)
 install_zenity_if_needed || true
 
-# Проверка и при необходимости установка tkinter (кроме SteamOS); для rpm-ostree — установка в слой
-install_tkinter_if_needed || true
+# Проверка и при необходимости установка PySide6 (QML); для rpm-ostree — установка в слой
+install_pyside6_if_needed || true
+
+# Базовые зависимости: python3, sudo, systemd, nft/iptables, wget/curl
+ensure_base_dependencies || true
 
 # Приветственное окно
 show_message "Zapret DPI Manager 2.0" \
@@ -1311,17 +1376,34 @@ fi
 
 echo "Установка завершена успешно"
 
-# Очистка временных файлов tkinter
-rm -f /tmp/zapret_tkinter_reboot 2>/dev/null || true
+# Проверка GUI-зависимостей после установки: без PySide6 и QML-файлов менеджер не запустится.
+QML_GUI_OK=false
+if python3 -c "import PySide6.QtCore, PySide6.QtGui, PySide6.QtQml, PySide6.QtQuick, PySide6.QtQuickControls2" 2>/dev/null; then
+    if [ -f "$TARGET_DIR/qml/main.qml" ] && [ -f "$TARGET_DIR/qmlui/app.py" ]; then
+        QML_GUI_OK=true
+        echo "GUI-зависимости на месте: PySide6 и QML-файлы найдены"
+    else
+        echo "Внимание: в $TARGET_DIR нет qml/main.qml или qmlui/app.py" >&2
+    fi
+else
+    echo "Внимание: PySide6 не импортируется" >&2
+fi
+if [ "$QML_GUI_OK" != true ]; then
+    show_message "Не хватает зависимостей" \
+        "Графический интерфейс может не запуститься.\n\nПроверьте, что установлен PySide6 с QML-модулями:\n• Arch/SteamOS: sudo pacman -S pyside6 qt6-declarative\n• Debian/Ubuntu: sudo apt install python3-pyside6.qml qml6-module-qtquick-controls qml6-module-qtquick-layouts qml6-module-qtquick-effects\n• Fedora: sudo dnf install python3-pyside6 qt6-qtdeclarative\n\nПодробности установки: /tmp/zapret_install.log"
+fi
+
+# Очистка временных файлов PySide6
+rm -f /tmp/zapret_pyside6_reboot 2>/dev/null || true
 
 
 # Показываем финальное сообщение
 show_final_message "$BACKUP_DIR" "$BACKUP_CREATED"
 
-# Диалог перезагрузки (если требовалась, например после rpm-ostree install tkinter)
+# Диалог перезагрузки (если требовалась, например после rpm-ostree install pyside6)
 if [ "$REBOOT_REQUIRED" = true ]; then
     if show_question "Перезапустить систему сейчас?" \
-        "Для применения изменений (установленные пакеты, например python3-tkinter) требуется перезагрузка.Перезапустить систему сейчас?" \
+        "Для применения изменений (установленные пакеты, например python3-pyside6) требуется перезагрузка.Перезапустить систему сейчас?" \
         "Да" "Нет"; then
         show_message "Перед перезагрузкой" \
             "После перезагрузки запустите программу с ярлыка на рабочем столе."

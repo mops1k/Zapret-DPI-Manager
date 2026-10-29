@@ -65,8 +65,6 @@ api.cssloader.app
 backend.cssloader.app
 cdn.tzatzikiweeb.moe
 cdn2.steamgriddb.com
-ndp.ngram.ca/plugins
-ndp.ngram.ca
 plugins.deckbrew.xyz
 plugins.deckbrew.xyz/plugins
 steam.live.bhvrdbd.com

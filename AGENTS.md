@@ -2,7 +2,8 @@
 
 ## Сборка и релиз
 
-- Сборка пакетов: `tools/build_release.sh` → `dist/Zapret_DPI_Manager.tar.gz` (полный пакет)
+- Сборка пакетов: `tools/build_release.sh` → `dist/Zapret_DPI_Manager.tar.gz` (полный пакет;
+  в обоих архивах — `main.py`, `core/`, `qml/`, `qmlui/`; установщик ставит `pyside6`/`qt6-declarative`)
   и `dist/zapret_updater.tar.gz` (автообновление, без `config.txt` и `files/lists/*_user.txt`);
   из `installer/install_zapret.sh` пересобирается `install_zapret.tar.gz`. В оба архива входит
   каталог `warp/` (скрипты и юнит WARP), сборка проверяет его состав.
@@ -23,30 +24,30 @@ python3 tools/validate_strategies.py --dry-run     # плейсхолдеры, �
 python3 tools/convert_flowseal_strategies.py --check
 python3 tools/check_bbdpi_convert.py               # конвертер BB DPI (ciadpi) → nfqws + dry-run
 python3 tools/check_github_fetch.py                # цепочка провайдеров core/github_fetch.py (без сети)
-ruff check core ui tools main.py                   # конфиг в pyproject.toml
-XAUTHORITY=$(ls /run/user/1000/xauth_* | head -1) python3 tools/smoke_ui_material.py  # дымовой тест всех окон
+ruff check core qmlui tools main.py                # конфиг в pyproject.toml
+QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software python3 main.py --selftest  # дымовой тест QML-интерфейса (74 проверки)
 ```
 
-CI (`.github/workflows/ci.yml`) выполняет те же шаги, кроме дымового теста окон (стенд WARP
-запускается через `sudo`, ему нужен `dev/net/tun`; сам стенд — `tools/warp_scripts_test/`).
+CI (`.github/workflows/ci.yml`) выполняет те же шаги: ставит PySide6 и прогоняет QML-самопроверку
+в offscreen; стенд WARP запускается через `sudo`, ему нужен `dev/net/tun` (`tools/warp_scripts_test/`).
 
-## Оформление (Material 3)
+## Оформление (Material 3 на Qt Quick)
 
-- Единая тема: `ui/theme/` (`theme.color(role)`, `theme.font(role)`, `theme.text(...)`,
-  `theme.space(step)`, `theme.radius(name)`, `theme.px(dp)`); режим dark/light хранится
-  в `utils/theme.txt`, переключается в меню настроек главного окна (`MainWindow.rebuild_ui()`).
-- Компоненты: `ui/components/material/` (кнопки, карточки, switch/checkbox/radio,
-  поля, списки и таблицы, диалоги, snackbar, прогресс, top app bar, тонкий скроллбар).
-- Хардкод-цвета в окнах запрещены: цвета берутся только из ролей темы. Прежние API
-  (`create_hover_button`, `custom_messagebox`, `_font` в больших окнах) сохранены.
-- Отчёт тестера стратегий открывается окном `ui/windows/report_window.py` (данные —
-  `utils/reports/*.json`, рядом с HTML; для старых отчётов работает разбор HTML),
+- Интерфейс — QML (`qml/`) и мост `qmlui/`: `Theme.colors`, `Theme.spaces`, `Theme.radii`,
+  `Theme.typeSize(...)` приходят из `qmlui/theme.py` (токены — `qmlui/tokens.py`);
+  режим dark/light хранится в `utils/theme.txt`, переключается в меню настроек.
+- Компоненты: `qml/components/` (MButton, Card, AppBar, Snackbar, MIcon, MCheckBox,
+  MRadioButton, MSwitch, StrategyRow); навигация — одно окно + StackView, экраны в `qml/pages/`.
+- Хардкод-цвета в QML запрещены: цвета берутся только из ролей темы.
+- Отчёт тестера стратегий — экран `qml/pages/ReportPage.qml` (данные — `utils/reports/*.json`),
   в браузер ничего не открывается автоматически.
 
 ## Архитектура (кратко)
 
-- `main.py` → `MainWindow` (миксины в `ui/windows/main/`) → `core/` → `config.txt`
-  → `/opt/zapret/starter.sh` → `nfqws --qnum=200` + правила NFQUEUE.
+- `main.py` → QGuiApplication + `qmlui/app.py` (`Backend` из `qmlui/backend.py`) → `core/`
+  → `config.txt` → `/opt/zapret/starter.sh` → `nfqws --qnum=200` + правила NFQUEUE.
+  Ядро не зависит от GUI: диалоги и прогресс идут через `core/dialog_port.py` (Qt-версия не
+  регистрирует порт — QML-экраны сообщают о результатах сами).
 - Служба: `/etc/systemd/system/zapret.service`, `Type=oneshot`, `RemainAfterExit=yes`,
   `ExecStart=/bin/bash /opt/zapret/starter.sh`, `ExecStop=/bin/bash /opt/zapret/stopper.sh`.
 - FWTYPE — единый источник истины `core/platform_info.detect_fwtype()` (nft → `nftables`,
@@ -92,7 +93,7 @@ CI (`.github/workflows/ci.yml`) выполняет те же шаги, кром�
   Atom-ленту коммитов, без лимита GitHub API); бэкапы перед записью — в
   `~/.cache/zapret_dpi_manager/`.
 - Стратегии из BB DPI (движок ciadpi, hufrea/byedpi): `core/bbdpi_convert.py` переводит
-  строку ciadpi в аргументы nfqws, окно `ui/windows/bbdpi_strategy_window.py` открывается
+  строку ciadpi в аргументы nfqws, экран `qml/pages/BbdpiPage.qml` открывается
   из «Сменить стратегию» → «Стратегия из BB DPI». Результат проверяется `nfqws --dry-run`
   и сохраняется в `files/strategy/` с записью в `config.txt`. Опции без аналога в nfqws
   (`-o/-q/-r/-A/-a/-m/-Y/-T/-L/-u/-y`) не переносятся — окно предупреждает о них перед

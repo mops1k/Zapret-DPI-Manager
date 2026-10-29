@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import subprocess
-import tkinter as tk
 import os
 import tempfile
 import tarfile
@@ -8,11 +7,10 @@ import shutil
 import time
 from collections.abc import Callable
 from pathlib import Path
-from tkinter import messagebox
 
 from core.app_logging import get_error_logger
-from core.dpi_utils import place_toplevel_centered_on_parent
 from core.zapret_updater import find_bundle_root, get_bundle_download_url
+from core.dialog_port import dialog_port
 
 # Файлы, которые могут содержать пользовательские данные: при восстановлении
 # существующие версии не перезаписываются.
@@ -37,6 +35,7 @@ class ZapretFileChecker:
         self.root = root_window
         self._show_info_fn = show_info_fn
         self.progress_window = None
+        self.progress_handle = None
         self.current_task = ""
         self.sudo_password = None
         self.debug_log = []  # Лог для дебага
@@ -58,11 +57,14 @@ class ZapretFileChecker:
             self.manager_dir / "core" / "zapret_checker.py",
             self.manager_dir / "core" / "dependency_checker.py",
 
-            # UI компоненты
-            self.manager_dir / "ui" / "windows" / "main_window.py",
+            # Интерфейс Qt Quick и диалоговый порт
+            self.manager_dir / "qmlui" / "app.py",
+            self.manager_dir / "qmlui" / "backend.py",
+            self.manager_dir / "qmlui" / "theme.py",
+            self.manager_dir / "qml" / "main.qml",
             self.manager_dir / "core" / "askpass.py",
             self.manager_dir / "core" / "sudo_helper.py",
-            self.manager_dir / "ui" / "components" / "custom_messagebox.py",
+            self.manager_dir / "core" / "dialog_port.py",
 
             # Файлы конфигурации (name_strategy.txt создаётся в рантайме — не обязателен)
             self.manager_dir / "utils" / "chosen_strategies.txt",
@@ -108,107 +110,25 @@ class ZapretFileChecker:
         if self._show_info_fn is not None:
             self._show_info_fn(title, message)
             return
-        if self.root and self.root.winfo_exists():
-            try:
-                messagebox.showinfo(title, message, parent=self.root)
-            except Exception:
-                print(f"{title}: {message}")
-        else:
-            print(f"{title}: {message}")
+        dialog_port().show_info(str(title), str(message))
 
-    def create_progress_window(self, title="Проверка файлов"):
-        """Создает окно прогресса"""
-        if not self.root:
-            return None
-
-        progress_window = tk.Toplevel(self.root)
-        progress_window.title(title)
-        progress_window.configure(bg='#182030')
-        progress_window.resizable(False, False)
-        progress_window.transient(self.root)
-
-        # Основной фрейм
-        main_frame = tk.Frame(progress_window, bg='#182030', padx=30, pady=25)
-        main_frame.pack(fill=tk.BOTH, expand=True)
-
-        # Заголовок
-        title_label = tk.Label(
-            main_frame,
-            text=title,
-            font=("Arial", 14, "bold"),
-            fg='#0a84ff',
-            bg='#182030'
-        )
-        title_label.pack(pady=(0, 15))
-
-        # Текущая задача
-        self.task_label = tk.Label(
-            main_frame,
-            text="Подготовка к проверке...",
-            font=("Arial", 11),
-            fg='white',
-            bg='#182030',
-            wraplength=340
-        )
-        self.task_label.pack(pady=(0, 10))
-
-        # Прогресс-бар
-        progress_frame = tk.Frame(main_frame, bg='#182030')
-        progress_frame.pack(fill=tk.X, pady=(10, 0))
-
-        # Фон прогресс-бара
-        self.progress_bg = tk.Frame(
-            progress_frame,
-            bg='#15354D',
-            height=12,
-            relief=tk.FLAT
-        )
-        self.progress_bg.pack(fill=tk.X)
-
-        # Сам прогресс-бар
-        self.progress_bar = tk.Frame(
-            self.progress_bg,
-            bg='#0a84ff',
-            height=12,
-            width=0
-        )
-        self.progress_bar.place(x=0, y=0, relheight=1.0)
-
-        # Процент выполнения
-        self.percent_label = tk.Label(
-            progress_frame,
-            text="0%",
-            font=("Arial", 10),
-            fg='#AAAAAA',
-            bg='#182030'
-        )
-        self.percent_label.pack(pady=(5, 0))
-
-        progress_window.update_idletasks()
-        place_toplevel_centered_on_parent(
-            progress_window, self.root, min_width=340, min_height=140, margin_width=8, margin_height=10
-        )
-        progress_window.update()
-        return progress_window
+    def create_progress_window(self, title="Прогресс"):
+        """Окно прогресса создаёт порт диалогов (Tk — в ui, Qt — в qmlui)."""
+        self.progress_handle = dialog_port().open_progress(title)
+        return self.progress_handle
 
     def update_progress(self, task, progress_percent):
-        """Обновляет прогресс-бар и текст задачи"""
-        if self.progress_window and self.progress_window.winfo_exists():
-            self.task_label.config(text=task)
-
-            width = self.progress_bg.winfo_width()
-            new_width = int(width * progress_percent / 100)
-            self.progress_bar.config(width=new_width)
-
-            self.percent_label.config(text=f"{int(progress_percent)}%")
-            self.progress_window.update()
+        """Обновляет прогресс через порт диалогов."""
+        handle = getattr(self, "progress_handle", None)
+        if handle is not None:
+            handle.update(str(task), progress_percent)
 
     def close_progress_window(self):
-        """Закрывает окно прогресса"""
-        if self.progress_window and self.progress_window.winfo_exists():
-            self.progress_window.destroy()
-            self.progress_window = None
-
+        """Закрывает прогресс, если он открыт."""
+        handle = getattr(self, "progress_handle", None)
+        if handle is not None:
+            handle.close()
+            self.progress_handle = None
     def get_current_progress(self):
         """Рассчитывает текущий прогресс на основе этапа"""
         if self.current_task == "check":
@@ -590,7 +510,7 @@ def run_file_check(root_window=None, *, show_info_fn: Callable[[str, str], None]
     """
     Запускает проверку и восстановление файлов Zapret DPI Manager.
 
-    Для кастомных диалогов приложения используйте ui.integrations.file_check.run_file_check.
+    Диалоги и прогресс идут через core.dialog_port.
     """
     checker = ZapretFileChecker(root_window, show_info_fn=show_info_fn)
     return checker.run_check()

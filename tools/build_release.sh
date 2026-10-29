@@ -2,8 +2,8 @@
 # Сборка релизных архивов Zapret DPI Manager.
 #
 # Состав повторяет релизы проекта:
-#   Zapret_DPI_Manager.tar.gz — полный пакет для установки (main.py, core, ui,
-#     files, ico, utils, zapret + пустой config.txt);
+#   Zapret_DPI_Manager.tar.gz — полный пакет для установки (main.py, core, qml,
+#     qmlui, files, ico, utils, zapret + пустой config.txt);
 #   zapret_updater.tar.gz — то же для обновления, но без config.txt и
 #     пользовательских files/lists/*_user.txt, чтобы не перезаписывать данные.
 #
@@ -29,7 +29,7 @@ done
 # Пути внутри ~/Zapret_DPI_Manager (в том же виде, что в релизах: с префиксом ./).
 # ./warp — скрипты и юнит подсистемы WARP (usque): само приложение устанавливает
 # их в /opt/warp, поэтому каталог обязан попадать в оба архива.
-PACKAGE_PATHS=(./main.py ./core ./ui ./files ./ico ./utils ./zapret ./warp ./config.txt)
+PACKAGE_PATHS=(./main.py ./core ./qml ./qmlui ./files ./ico ./utils ./zapret ./warp ./config.txt)
 
 # Пользовательские файлы, которые обновление не должно затирать.
 USER_FILES=(

@@ -17,11 +17,12 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install ruff
-        run: pip install ruff
+      - name: Install ruff and PySide6
+        run: |
+          pip install ruff PySide6
 
       - name: Python syntax
-        run: python -m compileall -q core ui tools main.py
+        run: python -m compileall -q core qmlui tools main.py
 
       - name: Shell syntax
         run: |
@@ -32,6 +33,12 @@ jobs:
 
       - name: WARP scripts on the stub stand
         run: sudo bash tools/check_warp_scripts.sh
+
+      - name: QML self-test (offscreen)
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QT_QUICK_BACKEND: software
+        run: python main.py --selftest
 
       - name: Strategy files (placeholders, format)
         run: python tools/validate_strategies.py

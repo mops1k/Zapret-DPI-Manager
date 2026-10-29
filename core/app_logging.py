@@ -23,7 +23,11 @@ def get_error_logger() -> logging.Logger:
 
 
 def setup_error_logging() -> None:
-    """Пишет только ERROR+ в файл; перехватывает необработанные исключения и Tk callback."""
+    """Пишет только ERROR+ в файл; перехватывает необработанные исключения.
+
+    Хук Tk-колбэков ставит Tk-адаптер интерфейса (``ui/dialogs_tk.py``),
+    поэтому ядро не импортирует tkinter.
+    """
     global _setup_done
     if _setup_done:
         return
@@ -78,13 +82,3 @@ def setup_error_logging() -> None:
             _orig_threading_excepthook(args)
 
         threading.excepthook = _threading_excepthook
-
-    import tkinter as tk
-
-    _orig_tk_report = tk.Tk.report_callback_exception
-
-    def _report_callback_exception(self, exc, val, tb):
-        log.error("Исключение в колбэке Tkinter", exc_info=(exc, val, tb))
-        return _orig_tk_report(self, exc, val, tb)
-
-    tk.Tk.report_callback_exception = _report_callback_exception  # type: ignore[method-assign]
