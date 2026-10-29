@@ -57,6 +57,68 @@ ApplicationWindow {
 
     }
 
+
+    // Уведомление о доступной версии: показывается один раз за запуск.
+    Rectangle {
+        id: updateOverlay
+        objectName: "updateOverlay"
+
+        anchors.fill: parent
+        z: 100
+        color: "#80000000"
+        visible: Backend.updateAvailable
+
+        MouseArea {
+            anchors.fill: parent
+            // Модально: клики мимо карточки не закрывают уведомление.
+        }
+
+        Card {
+            anchors.centerIn: parent
+            width: Math.min(parent.width - Theme.spaces.xxl * 2, 620)
+            title: "Доступно обновление"
+            subtitle: Backend.updateVersion.length > 0
+                ? "Zapret DPI Manager " + Backend.updateVersion
+                : ""
+
+            Column {
+                width: parent.width
+                spacing: Theme.spaces.md
+
+                Text {
+                    width: parent.width
+                    visible: Backend.updateNotes.length > 0
+                    text: Backend.updateNotes
+                    color: Theme.colors.on_surface_variant
+                    font.pixelSize: Theme.typeSize("body_medium")
+                    wrapMode: Text.WordWrap
+                    maximumLineCount: 8
+                    elide: Text.ElideRight
+                }
+
+                Row {
+                    width: parent.width
+                    spacing: Theme.spaces.sm
+                    layoutDirection: Qt.RightToLeft
+
+                    MButton {
+                        text: "Обновиться"
+                        onClicked: {
+                            root.openUpdatePage()
+                            Backend.startStartupUpdate()
+                        }
+                    }
+
+                    MButton {
+                        text: "Позже"
+                        variant: "text"
+                        onClicked: Backend.skipStartupUpdate()
+                    }
+                }
+            }
+        }
+    }
+
     //: Открыть экран стратегий из Python (отладка, скриншоты).
     function openStrategyPage() {
         if (stack.depth === 1) {

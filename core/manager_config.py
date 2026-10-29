@@ -13,5 +13,5 @@ GITHUB_MIRROR_TEMPLATE = "https://cdn.jsdelivr.net/gh/{owner}/{repo}@{ref}/{path
 # Единый манифест полного пакета (менеджер + служба) на GitHub (raw)
 VERSION_CONFIG = {
     "version_url": f"{GITHUB_RAW_URL}/version.txt",
-    "current_version": "2.12.2",
+    "current_version": "2.12.3",
 }

@@ -140,6 +140,35 @@ def run() -> int:
     QTimer.singleShot(0, backend.refresh)
     QTimer.singleShot(0, backend.refreshWarp)
 
+    # Перезапуск после установки обновления (как в Tk-версии): освобождаем
+    # блокировку экземпляра, стартуем новый процесс и выходим сами.
+    def _restart_after_update() -> None:
+        def _restart_now() -> None:
+            try:
+                lock.close()
+            except Exception:  # noqa: BLE001
+                pass
+            script = PROJECT_ROOT / "main.py"
+            try:
+                import subprocess
+
+                subprocess.Popen(
+                    [sys.executable, str(script)],
+                    cwd=str(PROJECT_ROOT),
+                    start_new_session=True,
+                )
+            except OSError:
+                log.exception("Не удалось перезапустить менеджер")
+            app.quit()
+
+        QTimer.singleShot(1200, _restart_now)
+
+    backend.restartRequested.connect(_restart_after_update)
+
+    # Проверка обновления при запуске с уведомлением (в самопроверке не нужна).
+    if "--selftest" not in sys.argv:
+        QTimer.singleShot(2500, backend.checkStartupUpdate)
+
     if "--page=tester" in sys.argv:
         from PySide6.QtCore import QMetaObject, Qt
 
@@ -726,6 +755,17 @@ def _run_selftest(app, engine, backend, theme, log) -> int:
         QTest.keyClick(window, Qt.Key_Escape)
         wait(500)
         checks.append(("возврат с автоподбора", window.property("pageDepth") == 1))
+
+        # Уведомление об обновлении: показать и скрыть (без сети и без реального обновления).
+        backend._apply_startup_update("2.99.0", "Тестовые заметки о версии")
+        wait(400)
+        overlay = window.findChild(QObject, "updateOverlay")
+        checks.append(("уведомление об обновлении показано",
+                       overlay is not None and overlay.property("visible") is True))
+        backend.skipStartupUpdate()
+        wait(300)
+        checks.append(("уведомление скрыто по «Позже»",
+                       overlay is not None and overlay.property("visible") is False))
 
         failed = [name for name, ok in checks if ok is False]
         for name, ok in checks:

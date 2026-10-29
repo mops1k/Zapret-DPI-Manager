@@ -1520,6 +1520,9 @@ class Backend(QObject):
     _unlockSaved = Signal(bool, str, str)
     _updateLineReady = Signal(str)
     _updateFinished = Signal(bool, str, str)
+    _startupUpdateReady = Signal(str, str)
+    restartRequested = Signal()
+    updateAvailableChanged = Signal()
     _testerLineReady = Signal(str)
     _testerFinished = Signal("QVariantMap")
 
@@ -1547,6 +1550,11 @@ class Backend(QObject):
         self._unlock: dict = {}
         self._update_log: list[dict] = []
         self._update_running = False
+        self._last_update_kind = ""
+        self._update_available = False
+        self._update_version = ""
+        self._update_notes = ""
+        self._startup_update_checked = False
         self._update_cancel = threading.Event()
         self._gamefilter: dict = {}
         self._dns_busy = False
@@ -1601,6 +1609,7 @@ class Backend(QObject):
         self._unlockSaved.connect(self._apply_unlock_saved)
         self._updateLineReady.connect(self._apply_update_line)
         self._updateFinished.connect(self._apply_update_finished)
+        self._startupUpdateReady.connect(self._apply_startup_update)
         self._ipsetReady.connect(self._apply_ipset)
         self._ipsetSaved.connect(self._apply_ipset_saved)
         self._checkLineReady.connect(self._apply_check_line)
@@ -2077,6 +2086,18 @@ class Backend(QObject):
     def updateLog(self) -> list[dict]:
         return self._update_log
 
+    @Property(bool, notify=updateAvailableChanged)
+    def updateAvailable(self) -> bool:
+        return self._update_available
+
+    @Property(str, notify=updateAvailableChanged)
+    def updateVersion(self) -> str:
+        return self._update_version
+
+    @Property(str, notify=updateAvailableChanged)
+    def updateNotes(self) -> str:
+        return self._update_notes
+
     @Property("QVariantMap", notify=unlockChanged)
     def unlockState(self) -> dict:
         return self._unlock
@@ -2112,6 +2133,53 @@ class Backend(QObject):
         self._update_cancel.set()
 
     @Slot()
+    def checkStartupUpdate(self) -> None:
+        """Один раз за запуск проверяет обновление и показывает уведомление."""
+        if self._startup_update_checked:
+            return
+        self._startup_update_checked = True
+        self._spawn(self._startup_update_worker)
+
+    @Slot()
+    def skipStartupUpdate(self) -> None:
+        if not self._update_available:
+            return
+        self._update_available = False
+        self.updateAvailableChanged.emit()
+
+    @Slot()
+    def startStartupUpdate(self) -> None:
+        """«Обновиться» в уведомлении: закрыть его и запустить обновление."""
+        self.skipStartupUpdate()
+        self.startUpdate("app")
+
+    def _startup_update_worker(self) -> None:
+        try:
+            from core.zapret_updater import ZapretBundleUpdater
+
+            version, _info, error = ZapretBundleUpdater().check_for_updates_detailed()
+            if error or not version:
+                return
+            notes = ""
+            try:
+                from core.github_release import fetch_release_notes_for_version
+
+                notes = fetch_release_notes_for_version(version) or ""
+            except Exception:  # noqa: BLE001
+                notes = ""
+            self._startupUpdateReady.emit(str(version), str(notes))
+        except Exception:  # noqa: BLE001
+            self._log.exception("Проверка обновлений при запуске")
+
+    def _apply_startup_update(self, version: str, notes: str) -> None:
+        if not version:
+            return
+        self._update_version = version
+        self._update_notes = notes.strip()
+        self._update_available = True
+        self.updateAvailableChanged.emit()
+
+    @Slot()
     def refreshUnlock(self) -> None:
         self._spawn(lambda: self._unlockReady.emit(read_unlock_state()))
 
@@ -2121,6 +2189,7 @@ class Backend(QObject):
         self._spawn(self._unlock_worker, ids)
 
     def _update_worker(self, kind: str) -> None:
+        self._last_update_kind = str(kind)
         self._update_cancel.clear()
 
         def log(text: str) -> None:
@@ -2177,6 +2246,9 @@ class Backend(QObject):
         self.updateStateChanged.emit()
         self._set_message(message, level)
         self.refreshUpdateVersions()
+        if ok and self._last_update_kind == "app":
+            # Как в Tk-версии: после установки обновления менеджер перезапускается сам.
+            self.restartRequested.emit()
 
     @Property("QVariantList", notify=testerLogChanged)
     def testerLog(self) -> list[dict]:
