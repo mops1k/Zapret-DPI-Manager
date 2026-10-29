@@ -1,0 +1,6 @@
+--filter-udp=443 --hostlist={list_general} --hostlist={list_general_user} --dpi-desync=fake --dpi-desync-udplen-increment=10 --dpi-desync-repeats=6 --dpi-desync-udplen-pattern=0xDEADBEEF --dpi-desync-fake-quic={quicgoogle} --new
+--filter-udp=50000-65535 --dpi-desync=fake,tamper --dpi-desync-any-protocol --dpi-desync-fake-quic={quicgoogle} --new
+--filter-tcp=443 --hostlist={list_general} --hostlist={list_general_user} --dpi-desync=fake,split2 --dpi-desync-autottl=2 --dpi-desync-fooling=md5sig --dpi-desync-fake-tls={tlsgoogle} --new
+--filter-tcp=80,443,5222 --hostlist={list_telegram} --hostlist={list_telegram_user} --ipset-exclude={ipset_exclude} --ipset-exclude={ipset_exclude_user} --dpi-desync=multisplit --dpi-desync-split-pos=1 --new
+--filter-tcp=80,443,5222 --ipset={ipset_telegram} --ipset={ipset_telegram_user} --ipset-exclude={ipset_exclude} --ipset-exclude={ipset_exclude_user} --dpi-desync=multisplit --dpi-desync-split-pos=1 --new
+--filter-udp=443,1400,50000-50100 --filter-l7=stun --ipset={ipset_telegram} --ipset={ipset_telegram_user} --ipset-exclude={ipset_exclude} --ipset-exclude={ipset_exclude_user} --dpi-desync=fake --dpi-desync-repeats=6 --dpi-desync-fake-stun={stun} --new

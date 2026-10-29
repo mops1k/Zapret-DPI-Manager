@@ -98,6 +98,17 @@ CI (`.github/workflows/ci.yml`) выполняет те же шаги: став�
   и сохраняется в `files/strategy/` с записью в `config.txt`. Опции без аналога в nfqws
   (`-o/-q/-r/-A/-a/-m/-Y/-T/-L/-u/-y`) не переносятся — окно предупреждает о них перед
   применением. Проверка конвертера — `tools/check_bbdpi_convert.py` (шаг CI).
+- Дополнительный источник — стратегии zapret из goodbyeDPI-UI (Storik4pro/goodbyeDPI-UI-configs,
+  Apache-2.0, движок winws 72.13): `core/goodbyedpi_ui.py` переводит JSON `custom_parameters`
+  в строки nfqws (убирает `--wf-*`/`--comment`, маппит файлы на плейсхолдеры, добавляет
+  `*_user`-пары и Telegram-правила). Импорт — `tools/import_goodbyedpi_ui.py --write|--check`,
+  исходники избранных стратегий — `tools/goodbyedpiui_src/*.json`; проверка в CI — `--check`.
+  Импортированы стратегии с механиками, которых нет у Flowseal: 1 (udplen/tamper),
+  3 (dup/ipfrag2), 12/14/18 (fake-tls-mod rndsni/padencap), 17 (WireGuard/ipset-ip/
+  dpi-desync-start), 22/23/25 (autottl, свой TLS ClientHello) — файлы `files/strategy/GdpiUI_*`.
+  Для них добавлены payload'ы `files/bin/{quic_6,quic_7,tls_clienthello_5,tls_clienthello_11,
+  http_fake_MS,tls_clienthello_max_ru_ui}.bin` и плейсхолдеры `{quic6}`, `{quic7}`, `{tls5}`,
+  `{tls11}`, `{httpfake_ms}`, `{tlsmaxui}` в `zapret/system/starter.sh`.
 - Обход Telegram: `core/flowseal_convert.manager_extra_rules()` добавляет каждой стратегии
   три правила — TCP по hostlist `{list_telegram}` (веб-версия, `t.me`, API), TCP по ipset
   `{ipset_telegram}` (Telegram Desktop ходит на дата-центры MTProto без SNI, hostlist его
