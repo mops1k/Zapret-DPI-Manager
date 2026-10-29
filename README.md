@@ -1,4 +1,4 @@
-# Zapret DPI Manager 2.0 для Steam Deck
+# Zapret DPI Manager 2.0
 
 Служба Zapret DPI основывается на разработке https://github.com/ImMALWARE. Большое ему спасибо за создание!
 Стратегии и некоторые доработки берутся из версии Zapret для Windows от [Flowseal](https://github.com/Flowseal/zapret-discord-youtube)
