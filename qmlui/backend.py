@@ -1115,7 +1115,7 @@ def run_update(kind: str, log) -> tuple[bool, str, str]:
             return False, f"Не удалось проверить обновление: {error}", "error"
         if not version or version == current:
             return True, f"Установлена последняя версия {current}", "success"
-        url = (info or {}).get("url") or ""
+        url = (info or {}).get("download_url") or (info or {}).get("url") or ""
         if not url:
             return False, f"Для версии {version} не найден адрес архива", "error"
         log(f"Скачивание {version}…")
