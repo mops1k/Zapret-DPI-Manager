@@ -9,6 +9,7 @@ Item {
 
     signal openStrategy()
     signal openWarp()
+    signal openTgws()
     signal openHostlist()
     signal openIpset()
     signal openConnectionCheck()
@@ -124,6 +125,11 @@ Item {
     function leaveToWarp() {
         leftOnce = true
         openWarp()
+    }
+
+    function leaveToTgws() {
+        leftOnce = true
+        openTgws()
     }
 
     onVisibleChanged: if (visible && leftOnce) Qt.callLater(restoreFocus)
@@ -300,7 +306,7 @@ Item {
                         enabled: Backend.warpInfo.installed === true && !Backend.warpBusy
                         onClicked: page.requestWarpToggle(Backend.warpInfo.active !== true)
                         KeyNavigation.up: autostartToggle
-                        KeyNavigation.down: strategyChange
+                        KeyNavigation.down: tgwsToggle
                     }
 
                     MButton {
@@ -310,6 +316,98 @@ Item {
                         onClicked: page.openWarp()
                         KeyNavigation.left: warpToggle
                         KeyNavigation.up: autostartToggle
+                        KeyNavigation.down: tgwsToggle
+                    }
+                }
+            }
+
+            // Карточка TG WS Proxy (локальный MTProto через WebSocket).
+            Card {
+                Layout.fillWidth: true
+                title: "Прокси Telegram (WS)"
+                subtitle: "Локальный MTProto-прокси через WebSocket"
+
+                RowLayout {
+                    width: parent.width
+                    spacing: Theme.spaces.sm
+
+                    Rectangle {
+                        implicitWidth: 10
+                        implicitHeight: 10
+                        radius: width / 2
+                        Layout.alignment: Qt.AlignVCenter
+                        color: {
+                            const kind = Backend.tgwsInfo.kind
+                            if (kind === "success")
+                                return Theme.colors.success
+                            if (kind === "error")
+                                return Theme.colors.error
+                            if (kind === "warning")
+                                return Theme.colors.warning
+                            return Theme.colors.outline
+                        }
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: Backend.tgwsInfo.title || "Проверка прокси…"
+                        color: Theme.colors.on_surface
+                        font.pixelSize: Theme.typeSize("body_large")
+                        elide: Text.ElideRight
+                    }
+
+                    BusyIndicator {
+                        running: Backend.tgwsBusy
+                        visible: Backend.tgwsBusy
+                        implicitWidth: 22
+                        implicitHeight: 22
+                    }
+                }
+
+                Text {
+                    width: parent.width
+                    visible: text.length > 0
+                    text: Backend.tgwsInfo.detail || ""
+                    color: Theme.colors.on_surface_variant
+                    font.pixelSize: Theme.typeSize("body_small")
+                    wrapMode: Text.WordWrap
+                }
+
+                RowLayout {
+                    width: parent.width
+                    spacing: Theme.spaces.sm
+
+                    MButton {
+                        id: tgwsToggle
+                        Layout.fillWidth: true
+                        variant: Backend.tgwsInfo.active ? "tonal" : "filled"
+                        text: Backend.tgwsInfo.active ? "Выключить прокси" : "Включить прокси"
+                        enabled: Backend.tgwsInfo.engine_ready === true && !Backend.tgwsBusy
+                        onClicked: Backend.setTgwsEnabled(Backend.tgwsInfo.active !== true)
+                        KeyNavigation.up: warpToggle
+                        KeyNavigation.right: tgwsAdd
+                        KeyNavigation.down: strategyChange
+                    }
+
+                    MButton {
+                        id: tgwsAdd
+                        text: "В Telegram"
+                        variant: "outlined"
+                        iconSource: "../icons/next.svg"
+                        enabled: (Backend.tgwsInfo.link || "").length > 0 && !Backend.tgwsBusy
+                        onClicked: Backend.openTgwsInTelegram()
+                        KeyNavigation.left: tgwsToggle
+                        KeyNavigation.up: warpToggle
+                        KeyNavigation.down: strategyChange
+                    }
+
+                    MButton {
+                        id: tgwsSettings
+                        text: "Настроить"
+                        variant: "text"
+                        onClicked: page.leaveToTgws()
+                        KeyNavigation.left: tgwsAdd
+                        KeyNavigation.up: warpToggle
                         KeyNavigation.down: strategyChange
                     }
                 }
@@ -346,7 +444,7 @@ Item {
                         variant: "outlined"
                         iconSource: "../icons/next.svg"
                         onClicked: page.leaveToStrategy()
-                        KeyNavigation.up: warpToggle
+                        KeyNavigation.up: tgwsToggle
                     }
                 }
             }

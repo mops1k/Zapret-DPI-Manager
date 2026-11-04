@@ -28,7 +28,7 @@ jobs:
           pip install ruff PySide6
 
       - name: Python syntax
-        run: python -m compileall -q core qmlui tools main.py
+        run: python -m compileall -q core qmlui tools tgws main.py
 
       - name: Shell syntax
         run: |
@@ -61,5 +61,8 @@ jobs:
       - name: GitHub fetch chain (offline)
         run: python tools/check_github_fetch.py
 
+      - name: TG WS Proxy engine (offline end-to-end)
+        run: python tools/check_tgws.py
+
       - name: Lint (ruff)
-        run: ruff check core qmlui tools main.py
+        run: ruff check core qmlui tools tgws main.py

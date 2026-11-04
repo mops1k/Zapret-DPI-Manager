@@ -24,8 +24,9 @@ python3 tools/validate_strategies.py --dry-run     # плейсхолдеры, �
 python3 tools/convert_flowseal_strategies.py --check
 python3 tools/check_bbdpi_convert.py               # конвертер BB DPI (ciadpi) → nfqws + dry-run
 python3 tools/check_github_fetch.py                # цепочка провайдеров core/github_fetch.py (без сети)
+python3 tools/check_tgws.py                         # стенд движка TG WS Proxy (obfuscated2 + WS + мост, без сети)
 ruff check core qmlui tools main.py                # конфиг в pyproject.toml
-QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software python3 main.py --selftest  # дымовой тест QML-интерфейса (74 проверки)
+QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software python3 main.py --selftest  # дымовой тест QML-интерфейса (83 проверки)
 ```
 
 CI (`.github/workflows/ci.yml`) выполняет те же шаги: ставит PySide6 и прогоняет QML-самопроверку
@@ -74,6 +75,27 @@ CI (`.github/workflows/ci.yml`) выполняет те же шаги: став�
   удаление также встроено в общий удалятор `core/zapret_uninstaller.py`. Скрипты в `/opt/warp`
   обновляются при включении WARP, если разошлись с поставкой (`runtime_outdated()`): обновление
   приложения каталог `/opt` не трогает.
+- TG WS Proxy — собственный локальный MTProto-прокси для Telegram, поднимающий трафик
+  через WebSocket (`kws*.web.telegram.org`), сделан по мотивам Flowseal/tg-ws-proxy, но
+  своим кодом и без внешних зависимостей. Движок — пакет `tgws/` (в обоих релизных архивах):
+  `crypto.py` (AES-CTR: `cryptography`, иначе OpenSSL `libcrypto` через ctypes),
+  `obfuscated2.py` (dd-секрет, relay-init), `ws.py` (WebSocket-клиент/сервер), `splitter.py`
+  (MTProto-пакеты), `bridge.py` (перешифровка клиент↔канал), `pool.py` (прямой WS к IP DC
+  с SNI + fronting, Cloudflare Worker/CF-proxy, TCP-фолбэк), `cf.py` (список CF-доменов с
+  GitHub и кэш), `faketls.py` (маскировка ee-секрета), `proxy.py` (asyncio-сервер и CLI
+  `python3 -m tgws`). HTTP/2-медиа-фолбэк апстрима не реализован: он рассчитан на
+  внешние telemt-серверы, а не на Telegram, поэтому медиа идёт по WS.
+  Управление — `core/tgws_manager.py`: состояние `utils/tgws.txt` (enabled/autostart/host/
+  port/secret/cf_domains/worker_domains/fake_tls), юнит `~/.config/systemd/user/tgws.service`
+  (`systemctl --user`, без sudo и пароля), журнал — `journalctl --user -u tgws` и
+  `~/.local/state/zapret_dpi_manager/tgws.log`. Движок запускается из каталога приложения,
+  поэтому обновляется вместе с ним; прокси не выключается при закрытии окна, а для работы
+  после выхода из сессии включается `loginctl enable-linger`. Ссылка для клиента —
+  `tg://proxy?server=…&port=…&secret=dd…` (кнопка «Добавить в Telegram» на главной и на
+  экране `qml/pages/TgwsPage.qml`). Старый CF-список апстрима сейчас не резолвится, поэтому
+  для работы в сетях с блокировкой WS нужны свои `--cfproxy-domain`/`--cfproxy-worker-domain`
+  (поля на экране прокси).
+
 - Все привилегированные команды — только через `core/sudo_helper.run_sudo` (`sudo -A` +
   `core/askpass.py`). Пароль приложение не хранит, кроме явного кэша 0600
   (`~/.cache/zapret_dpi_manager/sudo.cred`) по галочке «Запомнить».

@@ -29,7 +29,7 @@ done
 # Пути внутри ~/Zapret_DPI_Manager (в том же виде, что в релизах: с префиксом ./).
 # ./warp — скрипты и юнит подсистемы WARP (usque): само приложение устанавливает
 # их в /opt/warp, поэтому каталог обязан попадать в оба архива.
-PACKAGE_PATHS=(./main.py ./core ./qml ./qmlui ./files ./ico ./utils ./zapret ./warp ./config.txt)
+PACKAGE_PATHS=(./main.py ./core ./qml ./qmlui ./files ./ico ./utils ./zapret ./warp ./tgws ./config.txt)
 
 # Пользовательские файлы, которые обновление не должно затирать.
 USER_FILES=(
@@ -78,15 +78,19 @@ if [ -f "${INSTALLER_SRC}" ]; then
     printf '%-32s %8s байт, %s записей\n' "install_zapret.tar.gz" "$(stat -c%s "${INSTALLER_ARCHIVE}")" "$(tar tzf "${INSTALLER_ARCHIVE}" | wc -l)"
 fi
 
-if tar tzf "${MANAGER_ARCHIVE}" | grep -qE '__pycache__|\.pyc$'; then
+# Вывод tar забираем в переменную: `tar | grep -q` под pipefail даёт SIGPIPE
+# у tar и ложную ошибку сборки.
+MANAGER_LISTING="$(tar tzf "${MANAGER_ARCHIVE}")"
+if grep -qE '__pycache__|\.pyc$' <<<"${MANAGER_LISTING}"; then
     echo "предупреждение: в архив попали __pycache__/*.pyc" >&2
 fi
 
 # Подсистема WARP должна быть в обоих архивах целиком: без неё приложение не
 # сможет поставить /opt/warp/warp_start.sh и юнит warp.service.
 for archive in "${MANAGER_ARCHIVE}" "${UPDATER_ARCHIVE}"; do
+    listing="$(tar tzf "${archive}")"
     for required in ./warp/system/warp_start.sh ./warp/system/warp_stop.sh ./warp/system/warp.service; do
-        if ! tar tzf "${archive}" | grep -qx -- "${required}"; then
+        if ! grep -qx -- "${required}" <<<"${listing}"; then
             echo "ошибка: в $(basename "${archive}") нет ${required}" >&2
             exit 1
         fi

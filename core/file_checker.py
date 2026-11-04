@@ -66,6 +66,13 @@ class ZapretFileChecker:
             self.manager_dir / "core" / "sudo_helper.py",
             self.manager_dir / "core" / "dialog_port.py",
 
+            # Собственный MTProto-прокси Telegram (движок и управление)
+            self.manager_dir / "core" / "tgws_manager.py",
+            self.manager_dir / "tgws" / "proxy.py",
+            self.manager_dir / "tgws" / "crypto.py",
+            self.manager_dir / "tgws" / "obfuscated2.py",
+            self.manager_dir / "tgws" / "ws.py",
+
             # Файлы конфигурации (name_strategy.txt создаётся в рантайме — не обязателен)
             self.manager_dir / "utils" / "chosen_strategies.txt",
 
@@ -79,8 +86,8 @@ class ZapretFileChecker:
             self.manager_dir / "files" / "lists",
             self.manager_dir / "files" / "strategy",
             self.manager_dir / "core",
-            self.manager_dir / "ui" / "windows",
-            self.manager_dir / "ui" / "components",
+            self.manager_dir / "tgws",
+            self.manager_dir / "qml" / "pages",
             self.manager_dir / "ico",
             self.manager_dir / "utils",
         ]
@@ -94,8 +101,8 @@ class ZapretFileChecker:
             self.manager_dir / "core": 20,
             self.manager_dir / "ico": 1,
             self.manager_dir / "utils": 3,
-            self.manager_dir / "ui" / "windows": 14,
-            self.manager_dir / "ui" / "components": 2,
+            self.manager_dir / "tgws": 11,
+            self.manager_dir / "qml" / "pages": 14,
         }
 
     def log_debug(self, message):

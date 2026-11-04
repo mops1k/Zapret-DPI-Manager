@@ -1458,6 +1458,95 @@ def _warp_disable() -> tuple[bool, str]:
     return True, "WARP выключен"
 
 
+def build_tgws_status() -> dict:
+    """Состояние TG WS Proxy для карточки главного окна."""
+    payload: dict = {
+        "installed": False,
+        "active": False,
+        "engine_ready": False,
+        "enabled": False,
+        "title": "Статус прокси неизвестен",
+        "detail": "",
+        "kind": "on_surface_variant",
+        "host": "127.0.0.1",
+        "port": "1443",
+        "link": "",
+        "secret": "",
+        "cf_domains": "",
+        "worker_domains": "",
+        "fake_tls": "",
+        "linger": False,
+    }
+    try:
+        from core.tgws_manager import status as tgws_status
+
+        payload.update(tgws_status())
+    except Exception as exc:  # noqa: BLE001 - статус не должен ронять UI
+        payload["detail"] = str(exc)
+        return payload
+
+    if payload.get("active"):
+        payload["kind"] = "success"
+        payload["detail"] = (
+            f"{payload.get('host')}:{payload.get('port')} · трафик Telegram идёт "
+            "через WebSocket"
+        )
+    elif not payload.get("engine_ready"):
+        payload["kind"] = "error"
+        payload["detail"] = "файлы движка tgws не найдены в каталоге приложения"
+    elif payload.get("installed"):
+        payload["kind"] = "on_surface_variant"
+        payload["detail"] = "служба установлена, но остановлена"
+    else:
+        payload["detail"] = (
+            "локальный MTProto-прокси: обходит блокировки Telegram, не закрывается "
+            "вместе с приложением"
+        )
+    return payload
+
+
+def _tgws_toggle(enabled: bool) -> tuple[bool, str]:
+    """Включение/выключение прокси (user-служба, без sudo)."""
+    from core import tgws_manager
+
+    state = tgws_manager.read_state()
+    if enabled:
+        return tgws_manager.enable_start(state)
+    return tgws_manager.disable_stop(state)
+
+
+def _tgws_save(
+    port: str,
+    secret: str,
+    cf_domains: str,
+    worker_domains: str,
+    fake_tls: str,
+) -> tuple[bool, str]:
+    """Сохраняет настройки; активную службу перезапускает."""
+    from core import tgws_manager
+
+    state = tgws_manager.read_state()
+    state.update(
+        port=str(port).strip(),
+        secret=str(secret).strip().lower(),
+        cf_domains=str(cf_domains or "").replace("\n", ",").strip(),
+        worker_domains=str(worker_domains or "").replace("\n", ",").strip(),
+        fake_tls=str(fake_tls or "").strip(),
+    )
+    try:
+        tgws_manager.write_state(state)
+    except ValueError as exc:
+        return False, f"проверьте настройки: {exc}"
+    if tgws_manager.is_installed():
+        tgws_manager.write_unit(state)
+    if tgws_manager.is_active():
+        ok, message = tgws_manager.restart()
+        if ok:
+            return True, "настройки сохранены, прокси перезапущен"
+        return False, f"настройки сохранены, но перезапуск не удался: {message}"
+    return True, "настройки сохранены"
+
+
 class Backend(QObject):
     """Состояние приложения и действия над службой zapret."""
 
@@ -1490,6 +1579,9 @@ class Backend(QObject):
     testerStateChanged = Signal()
     warpJournalChanged = Signal()
     warpTraceChanged = Signal()
+    tgwsChanged = Signal()
+    tgwsBusyChanged = Signal()
+    tgwsLogChanged = Signal()
 
     # Внутренние сигналы: поднимаются из рабочих потоков, принимаются в главном.
     _statusReady = Signal(str, bool, bool)
@@ -1506,6 +1598,10 @@ class Backend(QObject):
     _warpActionResult = Signal(bool, str, str)
     _warpJournalReady = Signal(str)
     _warpTraceReady = Signal(str)
+    _tgwsReady = Signal("QVariantMap")
+    _tgwsOpFinished = Signal(bool, str, str)
+    _tgwsSaved = Signal(bool, str, str)
+    _tgwsLogReady = Signal(str)
     _hostlistReady = Signal("QVariantMap")
     _hostlistSaved = Signal(bool, str, str)
     _ipsetReady = Signal("QVariantMap")
@@ -1581,6 +1677,9 @@ class Backend(QObject):
         self._warp_journal = ""
         self._warp_trace = ""
         self._warp_busy = False
+        self._tgws: dict = {}
+        self._tgws_busy = False
+        self._tgws_log = ""
         self._hostlist_busy = False
         self._message = ""
         self._message_kind = "info"
@@ -1600,6 +1699,10 @@ class Backend(QObject):
         self._warpActionResult.connect(self._apply_warp_result)
         self._warpJournalReady.connect(self._apply_warp_journal)
         self._warpTraceReady.connect(self._apply_warp_trace)
+        self._tgwsReady.connect(self._apply_tgws)
+        self._tgwsOpFinished.connect(self._apply_tgws_result)
+        self._tgwsSaved.connect(self._apply_tgws_result)
+        self._tgwsLogReady.connect(self._apply_tgws_log)
         self._hostlistReady.connect(self._apply_hostlist)
         self._hostlistSaved.connect(self._apply_hostlist_saved)
         self._dnsReady.connect(self._apply_dns)
@@ -1720,6 +1823,170 @@ class Backend(QObject):
     def warpTrace(self) -> str:
         return self._warp_trace
 
+    # -- TG WS Proxy ---------------------------------------------------------
+
+    @Property("QVariantMap", notify=tgwsChanged)
+    def tgwsInfo(self) -> dict:
+        return self._tgws
+
+    @Property(bool, notify=tgwsBusyChanged)
+    def tgwsBusy(self) -> bool:
+        return self._tgws_busy
+
+    @Property(str, notify=tgwsLogChanged)
+    def tgwsLog(self) -> str:
+        return self._tgws_log
+
+    @Slot()
+    def refreshTgws(self) -> None:
+        self._spawn(self._tgws_status_worker)
+
+    def _tgws_status_worker(self) -> None:
+        self._tgwsReady.emit(build_tgws_status())
+
+    @Slot(bool)
+    def setTgwsEnabled(self, enabled: bool) -> None:
+        if self._tgws_busy:
+            return
+        self._set_tgws_busy(True)
+        self._spawn(self._tgws_operation_worker, bool(enabled))
+
+    def _set_tgws_busy(self, value: bool) -> None:
+        if self._tgws_busy == value:
+            return
+        self._tgws_busy = value
+        self.tgwsBusyChanged.emit()
+
+    def _apply_tgws(self, payload) -> None:
+        self._tgws = dict(payload)
+        self.tgwsChanged.emit()
+
+    def _apply_tgws_result(self, ok: bool, message: str, kind: str) -> None:
+        self._set_tgws_busy(False)
+        self._set_message(message, kind)
+        self.refreshTgws()
+
+    def _apply_tgws_log(self, text: str) -> None:
+        self._tgws_log = text
+        self.tgwsLogChanged.emit()
+
+    def _tgws_operation_worker(self, enabled: bool) -> None:
+        try:
+            ok, message = _tgws_toggle(enabled)
+        except Exception as exc:  # noqa: BLE001
+            self._log.exception("Ошибка переключения TG WS Proxy")
+            ok, message = False, str(exc)
+        kind = "success" if ok else "error"
+        if ok:
+            text = "Прокси Telegram включён" if enabled else "Прокси Telegram выключен"
+        else:
+            text = (
+                f"Не удалось {'включить' if enabled else 'выключить'} прокси: "
+                f"{_shorten(message, 300)}"
+            )
+        self._tgwsOpFinished.emit(bool(ok), text, kind)
+
+    @Slot(str, str, str, str, str)
+    def saveTgwsSettings(
+        self,
+        port: str,
+        secret: str,
+        cfDomains: str,
+        workerDomains: str,
+        fakeTls: str,
+    ) -> None:
+        if self._tgws_busy:
+            return
+        self._set_tgws_busy(True)
+        self._spawn(
+            self._tgws_save_worker, port, secret, cfDomains, workerDomains, fakeTls
+        )
+
+    def _tgws_save_worker(
+        self,
+        port: str,
+        secret: str,
+        cf_domains: str,
+        worker_domains: str,
+        fake_tls: str,
+    ) -> None:
+        try:
+            ok, message = _tgws_save(
+                port, secret, cf_domains, worker_domains, fake_tls
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._log.exception("Ошибка сохранения настроек TG WS Proxy")
+            ok, message = False, str(exc)
+        self._tgwsSaved.emit(bool(ok), message, "success" if ok else "error")
+
+    @Slot(result=str)
+    def newTgwsSecret(self) -> str:
+        """Новый случайный секрет (32 hex) для формы настроек."""
+        from core.tgws_manager import generate_secret
+
+        return generate_secret()
+
+    @Slot()
+    def refreshTgwsLog(self) -> None:
+        self._spawn(self._tgws_log_worker)
+
+    def _tgws_log_worker(self) -> None:
+        try:
+            from core.tgws_manager import log_tail
+
+            text = log_tail(120)
+        except Exception as exc:  # noqa: BLE001
+            text = f"не удалось прочитать журнал: {exc}"
+        self._tgwsLogReady.emit(text)
+
+    @Slot(result=bool)
+    def copyTgwsLink(self) -> bool:
+        """Копирует tg://proxy-ссылку в буфер обмена."""
+        link = str(self._tgws.get("link") or "")
+        if not link:
+            return False
+        try:
+            from PySide6.QtGui import QGuiApplication
+
+            QGuiApplication.clipboard().setText(link)
+            self._set_message("Ссылка прокси скопирована", "success")
+            return True
+        except Exception as exc:  # noqa: BLE001
+            self._set_message(f"Не удалось скопировать ссылку: {exc}", "error")
+            return False
+
+    @Slot()
+    def openTgwsInTelegram(self) -> None:
+        """Открывает tg://proxy — Telegram предложит добавить прокси."""
+        link = str(self._tgws.get("link") or "")
+        if not link:
+            self._set_message("Сначала включите прокси", "warning")
+            return
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        if QDesktopServices.openUrl(QUrl(link)):
+            self._set_message("Ссылка передана Telegram", "success")
+        else:
+            self._set_message(
+                "Telegram не найден: скопируйте ссылку и добавьте прокси вручную",
+                "warning",
+            )
+
+    @Slot(result=bool)
+    def enableTgwsLinger(self) -> bool:
+        """Разрешает прокси работать после выхода из сессии."""
+        try:
+            from core.tgws_manager import enable_linger
+
+            ok, message = enable_linger()
+        except Exception as exc:  # noqa: BLE001
+            self._set_message(f"Не удалось включить linger: {exc}", "error")
+            return False
+        self._set_message(message, "success" if ok else "warning")
+        self.refreshTgws()
+        return bool(ok)
+
     @Slot()
     def refreshWarp(self) -> None:
         self._spawn(self._warp_status_worker)
@@ -1762,6 +2029,7 @@ class Backend(QObject):
 
     def _warp_status_worker(self) -> None:
         self._warpReady.emit(build_warp_status())
+        self._tgwsReady.emit(build_tgws_status())
 
     def _warp_operation_worker(self, enabled: bool, start_zapret: bool) -> None:
         try:
@@ -2736,6 +3004,7 @@ class Backend(QObject):
         self._statusReady.emit(state, bool(autostart), bool(exists))
         self._strategyReady.emit(read_strategy_name())
         self._warpReady.emit(build_warp_status())
+        self._tgwsReady.emit(build_tgws_status())
 
     def _run_operation(self, action: str) -> None:
         self._set_busy(True)

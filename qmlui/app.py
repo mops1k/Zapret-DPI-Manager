@@ -246,6 +246,13 @@ def run() -> int:
         QTimer.singleShot(400, lambda: QMetaObject.invokeMethod(
             window, "openWarpPage", Qt.AutoConnection))
 
+    if "--page=tgws" in sys.argv:
+        from PySide6.QtCore import QMetaObject, Qt
+
+        window = engine.rootObjects()[0]
+        QTimer.singleShot(400, lambda: QMetaObject.invokeMethod(
+            window, "openTgwsPage", Qt.AutoConnection))
+
     if "--page=strategy" in sys.argv:
         from PySide6.QtCore import QMetaObject, Qt
 
@@ -355,16 +362,24 @@ def _run_selftest(app, engine, backend, theme, log) -> int:
             QTest.keyClick(window, Qt.Key_Left)
             checks.append(("кнопка WARP", "WARP" in focus_text()))
             QTest.keyClick(window, Qt.Key_Down)
+            checks.append(("карточка TG WS Proxy в цепочке",
+                           "прокси" in focus_text().lower()))
+            QTest.keyClick(window, Qt.Key_Right)
+            checks.append(("кнопка «В Telegram»", focus_text() == "В Telegram"))
+            QTest.keyClick(window, Qt.Key_Down)
             checks.append(("навигация вниз", focus_text() == "Сменить"))
             QTest.keyClick(window, Qt.Key_Up)
-            checks.append(("навигация вверх", "WARP" in focus_text()))
+            checks.append(("навигация вверх", "прокси" in focus_text().lower()))
+            QTest.keyClick(window, Qt.Key_Up)
+            checks.append(("навигация вверх к WARP", "WARP" in focus_text()))
             QTest.keyClick(window, Qt.Key_Up)
             checks.append(("возврат к службе", "автозапуск" in focus_text()))
             QTest.keyClick(window, Qt.Key_Up)
         else:
             for _name in ("карточка WARP в цепочке", "кнопка WARP",
+                          "карточка TG WS Proxy в цепочке", "кнопка «В Telegram»",
                           "навигация вниз", "навигация вверх",
-                          "возврат к службе"):
+                          "навигация вверх к WARP", "возврат к службе"):
                 checks.append((_name, None))
             QTest.keyClick(window, Qt.Key_Up)  # автозапуск -> панель
         checks.append(("выход в панель", focus_icon().endswith("refresh.svg")))
@@ -391,6 +406,7 @@ def _run_selftest(app, engine, backend, theme, log) -> int:
         # Экран выбора стратегии: переход, список, возврат.
         QTest.keyClick(window, Qt.Key_Down)  # настройки -> кнопка службы
         QTest.keyClick(window, Qt.Key_Down)  # -> кнопка WARP
+        QTest.keyClick(window, Qt.Key_Down)  # -> карточка TG WS Proxy
         QTest.keyClick(window, Qt.Key_Down)  # -> «Сменить»
         checks.append(("фокус на «Сменить»", focus_text() == "Сменить"))
         QTest.keyClick(window, Qt.Key_Space)
@@ -514,7 +530,8 @@ def _run_selftest(app, engine, backend, theme, log) -> int:
             wait(700)
         if warp_ready:
             # Экран WARP: движок, списки, журнал, проверка версии.
-            QTest.keyClick(window, Qt.Key_Up)      # «Сменить» -> кнопка WARP
+            QTest.keyClick(window, Qt.Key_Up)      # «Сменить» -> карточка TG WS Proxy
+            QTest.keyClick(window, Qt.Key_Up)      # -> кнопка WARP
             QTest.keyClick(window, Qt.Key_Right)   # -> «Настроить»
             QTest.keyClick(window, Qt.Key_Space)
             wait(900)
@@ -540,7 +557,7 @@ def _run_selftest(app, engine, backend, theme, log) -> int:
             QTest.keyClick(window, Qt.Key_Escape)
             wait(500)
             checks.append(("возврат с экрана WARP", window.property("pageDepth") == 1))
-    
+
         else:
             for _name in (
                 "экран WARP открыт",
@@ -551,8 +568,28 @@ def _run_selftest(app, engine, backend, theme, log) -> int:
                 "возврат с экрана WARP",
             ):
                 checks.append((_name, None))
+        # TG WS Proxy: собственная страница и ссылка tg://proxy.
+        from PySide6.QtCore import QMetaObject as _QMeta
+
+        _QMeta.invokeMethod(window, "openTgwsPage", Qt.AutoConnection)
+        wait(800)
+        checks.append(("экран TG WS Proxy открыт",
+                       focus_icon().endswith("back.svg")
+                       and window.property("pageDepth") == 2))
+        tgws = dict(backend.tgwsInfo)
+        print(f"  [debug] TGWS: title={tgws.get('title')!r} "
+              f"engine={tgws.get('engine_ready')} link={str(tgws.get('link'))[:48]!r}",
+              flush=True)
+        checks.append(("статус прокси прочитан", bool(tgws.get("title"))))
+        checks.append(("ссылка tg:// для Telegram",
+                       str(tgws.get("link") or "").startswith("tg://proxy?")))
+        QTest.keyClick(window, Qt.Key_Escape)
+        wait(600)
+        checks.append(("возврат с TG WS Proxy", window.property("pageDepth") == 1))
+
         # Hostlist: из меню настроек.
-        QTest.keyClick(window, Qt.Key_Up)      # «Сменить» -> кнопка WARP
+        QTest.keyClick(window, Qt.Key_Up)      # «Сменить» -> карточка TG WS Proxy
+        QTest.keyClick(window, Qt.Key_Up)      # -> кнопка WARP
         QTest.keyClick(window, Qt.Key_Up)      # -> автозапуск
         QTest.keyClick(window, Qt.Key_Up)      # -> панель (перезапуск)
         QTest.keyClick(window, Qt.Key_Right)
@@ -575,7 +612,8 @@ def _run_selftest(app, engine, backend, theme, log) -> int:
         checks.append(("возврат с Hostlist", window.property("pageDepth") == 1))
 
         # IPSet: из меню настроек.
-        QTest.keyClick(window, Qt.Key_Up)      # «Сменить» -> кнопка WARP
+        QTest.keyClick(window, Qt.Key_Up)      # «Сменить» -> карточка TG WS Proxy
+        QTest.keyClick(window, Qt.Key_Up)      # -> кнопка WARP
         QTest.keyClick(window, Qt.Key_Up)      # -> автозапуск
         QTest.keyClick(window, Qt.Key_Up)      # -> панель
         QTest.keyClick(window, Qt.Key_Right)
@@ -598,7 +636,8 @@ def _run_selftest(app, engine, backend, theme, log) -> int:
         checks.append(("возврат с IPSet", window.property("pageDepth") == 1))
 
         # DNS: из меню настроек.
-        QTest.keyClick(window, Qt.Key_Up)      # «Сменить» -> кнопка WARP
+        QTest.keyClick(window, Qt.Key_Up)      # «Сменить» -> карточка TG WS Proxy
+        QTest.keyClick(window, Qt.Key_Up)      # -> кнопка WARP
         QTest.keyClick(window, Qt.Key_Up)      # -> автозапуск
         QTest.keyClick(window, Qt.Key_Up)      # -> панель
         QTest.keyClick(window, Qt.Key_Right)
@@ -620,7 +659,8 @@ def _run_selftest(app, engine, backend, theme, log) -> int:
         checks.append(("возврат с DNS", window.property("pageDepth") == 1))
 
         # GameFilter: кнопка на панели.
-        QTest.keyClick(window, Qt.Key_Up)      # «Сменить» -> кнопка WARP
+        QTest.keyClick(window, Qt.Key_Up)      # «Сменить» -> карточка TG WS Proxy
+        QTest.keyClick(window, Qt.Key_Up)      # -> кнопка WARP
         QTest.keyClick(window, Qt.Key_Up)      # -> автозапуск
         QTest.keyClick(window, Qt.Key_Up)      # -> панель (перезапуск)
         QTest.keyClick(window, Qt.Key_Right)   # -> GameFilter
@@ -638,7 +678,8 @@ def _run_selftest(app, engine, backend, theme, log) -> int:
         checks.append(("возврат с GameFilter", window.property("pageDepth") == 1))
 
         # Обновление: из меню настроек (7-й пункт).
-        QTest.keyClick(window, Qt.Key_Up)      # «Сменить» -> кнопка WARP
+        QTest.keyClick(window, Qt.Key_Up)      # «Сменить» -> карточка TG WS Proxy
+        QTest.keyClick(window, Qt.Key_Up)      # -> кнопка WARP
         QTest.keyClick(window, Qt.Key_Up)      # -> автозапуск
         QTest.keyClick(window, Qt.Key_Up)      # -> панель
         QTest.keyClick(window, Qt.Key_Right)
@@ -659,9 +700,10 @@ def _run_selftest(app, engine, backend, theme, log) -> int:
         checks.append(("возврат с обновления", window.property("pageDepth") == 1))
 
         # Разблокировка сервисов: из меню (6-й пункт).
-        QTest.keyClick(window, Qt.Key_Up)
-        QTest.keyClick(window, Qt.Key_Up)
-        QTest.keyClick(window, Qt.Key_Up)
+        QTest.keyClick(window, Qt.Key_Up)      # «Сменить» -> TG WS Proxy
+        QTest.keyClick(window, Qt.Key_Up)      # -> кнопка WARP
+        QTest.keyClick(window, Qt.Key_Up)      # -> автозапуск
+        QTest.keyClick(window, Qt.Key_Up)      # -> панель
         QTest.keyClick(window, Qt.Key_Right)
         QTest.keyClick(window, Qt.Key_Right)
         QTest.keyClick(window, Qt.Key_Space)
@@ -716,7 +758,8 @@ def _run_selftest(app, engine, backend, theme, log) -> int:
         checks.append(("возврат с отчёта", window.property("pageDepth") == 1))
 
         # Проверка соединения: из меню настроек, запуск и остановка проверок.
-        QTest.keyClick(window, Qt.Key_Up)      # «Сменить» -> кнопка WARP
+        QTest.keyClick(window, Qt.Key_Up)      # «Сменить» -> карточка TG WS Proxy
+        QTest.keyClick(window, Qt.Key_Up)      # -> кнопка WARP
         QTest.keyClick(window, Qt.Key_Up)      # -> автозапуск
         QTest.keyClick(window, Qt.Key_Up)      # -> панель
         QTest.keyClick(window, Qt.Key_Right)

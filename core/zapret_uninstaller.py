@@ -609,6 +609,18 @@ class ZapretUninstaller:
             except Exception as e:
                 self.log_debug(f"Предупреждение: подсистему WARP удалить не удалось: {e}")
 
+            # 6.6 Удаляем прокси Telegram (user-служба, состояние, журнал)
+            try:
+                from core.tgws_manager import uninstall as uninstall_tgws
+
+                tgws_ok, tgws_message = uninstall_tgws()
+                self.log_debug(
+                    f"TG WS Proxy: {tgws_message}" if tgws_ok
+                    else f"Предупреждение TG WS Proxy: {tgws_message}"
+                )
+            except Exception as e:
+                self.log_debug(f"Предупреждение: прокси Telegram удалить не удалось: {e}")
+
             # 7. Удаляем директорию менеджера
             self.update_progress("Удаление файлов менеджера...", 80)
             if not self.remove_manager_directory():

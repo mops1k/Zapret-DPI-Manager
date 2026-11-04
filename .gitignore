@@ -15,3 +15,6 @@ tools/warp_scripts_test/routes
 tools/warp_scripts_test/journal.log
 tools/warp_scripts_test/warp-usque.log*
 tools/warp_scripts_test/iprules
+
+# Состояние TG WS Proxy (секрет прокси) — локальное, не коммитится
+utils/tgws.txt

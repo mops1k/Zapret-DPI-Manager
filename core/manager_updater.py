@@ -24,6 +24,7 @@ class ManagerUpdater(BaseUpdater):
             "utils/chosen_strategies.txt",
             "utils/name_strategy.txt",
             "utils/working_strategies.txt",
+            "utils/tgws.txt",
             "files/lists/ipset-all_user.txt",
             "files/lists/ipset-exclude_user.txt",
             "files/lists/list-exclude_user.txt",

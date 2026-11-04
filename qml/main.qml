@@ -41,6 +41,7 @@ ApplicationWindow {
             id: mainPage
             onOpenStrategy: stack.push(strategyComponent)
             onOpenWarp: stack.push(warpComponent)
+            onOpenTgws: stack.push(tgwsComponent)
             onOpenHostlist: stack.push(hostlistComponent)
             onOpenIpset: stack.push(ipsetComponent)
             onOpenConnectionCheck: stack.push(checkComponent)
@@ -200,6 +201,13 @@ ApplicationWindow {
         }
     }
 
+    //: Открыть экран TG WS Proxy из Python (отладка, скриншоты).
+    function openTgwsPage() {
+        if (stack.depth === 1) {
+            mainPage.leaveToTgws()
+        }
+    }
+
     Component {
         id: strategyComponent
 
@@ -304,6 +312,14 @@ ApplicationWindow {
         id: warpComponent
 
         WarpPage {
+            onBack: stack.pop()
+        }
+    }
+
+    Component {
+        id: tgwsComponent
+
+        TgwsPage {
             onBack: stack.pop()
         }
     }
