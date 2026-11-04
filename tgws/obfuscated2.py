@@ -158,6 +158,14 @@ class ReencryptContext:
         self.tg_enc = tg_enc    # к Telegram: шифрование
         self.tg_dec = tg_dec    # от Telegram: расшифровка
 
+    def close(self) -> None:
+        """Освобождает OpenSSL-контексты (см. tgws.crypto)."""
+        for ctr in (self.clt_dec, self.clt_enc, self.tg_enc, self.tg_dec):
+            try:
+                ctr.close()
+            except Exception:  # noqa: BLE001
+                pass
+
 
 def build_reencrypt_context(
     handshake: ClientHandshake, secret: bytes, relay_init: bytes

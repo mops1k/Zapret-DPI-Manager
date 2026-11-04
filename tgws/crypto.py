@@ -37,6 +37,12 @@ class AesCtr:
             return b""
         return self._impl.update(data)
 
+    def close(self) -> None:
+        """Освобождает ресурсы (для libcrypto — обязательно явно)."""
+        close = getattr(self._impl, "close", None)
+        if close is not None:
+            close()
+
 
 # --- реализация на cryptography ---------------------------------------------
 
@@ -55,6 +61,9 @@ class _CryptographyCtr:
 
     def update(self, data: bytes) -> bytes:
         return self._ctx.update(data)
+
+    def close(self) -> None:
+        self._ctx = None
 
 
 # --- реализация на libcrypto (ctypes) ---------------------------------------
@@ -162,14 +171,16 @@ class _OpenSslCtr:
             raise CryptoUnavailable("EVP_EncryptInit_ex завершилась ошибкой")
         self._ctx = ctx
 
-    def __del__(self) -> None:
+    def close(self) -> None:
+        # Освобождаем явно: __del__ в ctypes при завершении интерпретатора
+        # приводит к segfault (порядок финализации модулей не определён).
         ctx = getattr(self, "_ctx", None)
+        self._ctx = None
         if ctx:
             try:
                 self._lib.EVP_CIPHER_CTX_free(ctx)
-            except Exception:  # noqa: BLE001 - финализатор не должен падать
+            except Exception:  # noqa: BLE001 - при выходе из процесса не важно
                 pass
-            self._ctx = None
 
     def update(self, data: bytes) -> bytes:
         in_len = len(data)

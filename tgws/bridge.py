@@ -128,6 +128,10 @@ async def bridge_channel(
             await writer.wait_closed()
         except BaseException:  # noqa: BLE001
             pass
+        try:
+            ctx.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 async def bridge_tcp(
@@ -185,3 +189,7 @@ async def bridge_tcp(
                 await stream_writer.wait_closed()
             except BaseException:  # noqa: BLE001
                 pass
+        try:
+            ctx.close()
+        except Exception:  # noqa: BLE001
+            pass
