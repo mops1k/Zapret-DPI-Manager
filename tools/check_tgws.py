@@ -120,7 +120,15 @@ async def main() -> int:
 
     from tgws.config import Config
 
-    cfg = Config(secret=SECRET.hex(), port=0, host="127.0.0.1", h2_media=False)
+    # Стенд не должен ходить в сеть: свои «домены» отключают фоновое
+    # обновление списка Cloudflare (поток с urllib/ssl мешает чистому выходу).
+    cfg = Config(
+        secret=SECRET.hex(),
+        port=0,
+        host="127.0.0.1",
+        h2_media=False,
+        cfproxy_user_domains=["example.invalid"],
+    )
     proxy = TgWsProxy(cfg)
 
     async def connector(dc: int, is_media: bool) -> WebSocket:

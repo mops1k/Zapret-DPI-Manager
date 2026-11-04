@@ -88,7 +88,7 @@ class TgWsProxy:
         cf.balancer.update_domains(cf.initial_domains())
         if self.cfg.cfproxy_user_domains:
             cf.balancer.update_domains(self.cfg.cfproxy_user_domains)
-        else:
+        elif self.cfg.fallback_cfproxy:
             cf.start_refresh()
 
         if self.cfg.h2_enabled:
