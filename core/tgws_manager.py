@@ -208,7 +208,7 @@ def build_command(state: dict) -> list[str]:
 
 def build_unit(state: dict) -> str:
     command = " ".join(_quote(arg) for arg in build_command(state))
-    log_dir = log_path().parent
+    log_path().parent  # каталог журнала создаётся в write_unit
     return f"""[Unit]
 Description=Telegram MTProto ↔ WebSocket proxy (Zapret DPI Manager)
 After=network-online.target
