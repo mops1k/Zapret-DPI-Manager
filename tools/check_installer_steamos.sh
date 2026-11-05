@@ -30,9 +30,11 @@ extract_block() {
 
 extract_block '^# >>> steamos helpers' '^# <<< steamos helpers' > "$TMP_DIR/steamos_helpers.sh"
 extract_block '^# >>> pyside6 install helpers' '^# <<< pyside6 install helpers' > "$TMP_DIR/pyside6_helpers.sh"
+extract_block '^# >>> sudo credential helpers' '^# <<< sudo credential helpers' > "$TMP_DIR/cred_helpers.sh"
 
 [ -s "$TMP_DIR/steamos_helpers.sh" ] || { echo "FAIL: не найден блок steamos helpers" >&2; exit 1; }
 [ -s "$TMP_DIR/pyside6_helpers.sh" ] || { echo "FAIL: не найден блок pyside6 install helpers" >&2; exit 1; }
+[ -s "$TMP_DIR/cred_helpers.sh" ] || { echo "FAIL: не найден блок sudo credential helpers" >&2; exit 1; }
 
 cat > "$TMP_DIR/os-steamos" <<'EOF'
 NAME="SteamOS"
@@ -80,6 +82,57 @@ esac
 EOF
 chmod +x "$TMP_DIR/bin/curl"
 
+# Подменный sudo: ответы задаются через STUB_SUDO_N_RC / STUB_SUDO_S_RC / STUB_SUDO_S_ERR.
+cat > "$TMP_DIR/bin/sudo" <<'EOF'
+#!/bin/bash
+printf 'sudo: %s\n' "$*" >> "$CALLS"
+case "$*" in
+    "-n true")
+        exit "${STUB_SUDO_N_RC:-1}"
+        ;;
+    *"-S -k true"*)
+        [ -n "${STUB_SUDO_S_ERR:-}" ] && printf '%s\n' "$STUB_SUDO_S_ERR" >&2
+        exit "${STUB_SUDO_S_RC:-0}"
+        ;;
+    *)
+        exit 0
+        ;;
+esac
+EOF
+chmod +x "$TMP_DIR/bin/sudo"
+
+# Подменный passwd: статус читает из STUB_PASSWD_STATUS_FILE, установка пароля пишет "P".
+cat > "$TMP_DIR/bin/passwd" <<'EOF'
+#!/bin/bash
+printf 'passwd: %s\n' "$*" >> "$CALLS"
+if [ "$1" = "-S" ]; then
+    status="$(cat "${STUB_PASSWD_STATUS_FILE:-/nonexistent}" 2>/dev/null || true)"
+    printf '%s %s\n' "${2:-deck}" "${status:-}"
+    exit 0
+fi
+cat >/dev/null 2>&1 || true
+printf 'P' > "${STUB_PASSWD_STATUS_FILE:-/tmp/passwd-status.$$}"
+printf 'passwd-set\n' >> "$CALLS"
+exit 0
+EOF
+chmod +x "$TMP_DIR/bin/passwd"
+
+# Подменный zenity: пароль из STUB_ZENITY_PASSWORD, ошибки только логируются.
+cat > "$TMP_DIR/bin/zenity" <<'EOF'
+#!/bin/bash
+case "$*" in
+    *--password*)
+        printf 'rootzenity-lib\n' >> "$CALLS"
+        printf '%s\n' "${STUB_ZENITY_PASSWORD:-}"
+        ;;
+    *--error*)
+        printf 'zenity-error\n' >> "$CALLS"
+        ;;
+esac
+exit 0
+EOF
+chmod +x "$TMP_DIR/bin/zenity"
+
 # Фикстуры: «бандл» с vendor/PySide6 и SHA256SUMS к нему.
 mkdir -p "$TMP_DIR/vendor_stage/vendor/PySide6/Qt/qml/QtQuick"
 : > "$TMP_DIR/vendor_stage/vendor/PySide6/__init__.py"
@@ -124,6 +177,8 @@ python3() {
 source "$STEAMOS_HELPERS"
 # shellcheck source=/dev/null
 source "$PYSIDE6_HELPERS"
+# shellcheck source=/dev/null
+source "$CRED_HELPERS"
 
 PKG_MANAGER="${PKG_MANAGER:-pacman}"
 PKG_UPDATE="${PKG_UPDATE:-pacman -Sy}"
@@ -131,6 +186,7 @@ PKG_INSTALL="${PKG_INSTALL:-pacman -S --noconfirm}"
 QML_PKGS="${QML_PKGS:-pyside6 qt6-declarative}"
 SYSTEM_TYPE="${SYSTEM_TYPE:-steamos}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+CURRENT_USER="${CURRENT_USER:-deck}"
 
 eval "$COMMAND"
 EOF
@@ -148,6 +204,24 @@ run_case() {
     PATH="$TMP_DIR/bin:$PATH" \
     STEAMOS_HELPERS="$TMP_DIR/steamos_helpers.sh" \
     PYSIDE6_HELPERS="$TMP_DIR/pyside6_helpers.sh" \
+    CRED_HELPERS="$TMP_DIR/cred_helpers.sh" \
+    "$@" \
+    bash "$TMP_DIR/driver.sh" "$calls" "$command"
+}
+
+run_case_out() {
+    local name="$1"
+    local os_release="$2"
+    local command="$3"
+    shift 3
+
+    local calls="$TMP_DIR/calls-$name.txt"
+    ZAPRET_OS_RELEASE="$os_release" \
+    ZAPRET_LOG_FILE="$TMP_DIR/log-$name.txt" \
+    PATH="$TMP_DIR/bin:$PATH" \
+    STEAMOS_HELPERS="$TMP_DIR/steamos_helpers.sh" \
+    PYSIDE6_HELPERS="$TMP_DIR/pyside6_helpers.sh" \
+    CRED_HELPERS="$TMP_DIR/cred_helpers.sh" \
     "$@" \
     bash "$TMP_DIR/driver.sh" "$calls" "$command"
 }
@@ -228,6 +302,7 @@ ZAPRET_LOG_FILE="$TMP_DIR/log-exit.txt" \
 PATH="$TMP_DIR/bin:$PATH" \
 STEAMOS_HELPERS="$TMP_DIR/steamos_helpers.sh" \
 PYSIDE6_HELPERS="$TMP_DIR/pyside6_helpers.sh" \
+CRED_HELPERS="$TMP_DIR/cred_helpers.sh" \
 STUB_PACMAN_INSTALL_RC=1 STUB_PIP_INSTALL_RC=1 STUB_IMPORT_RC=1 \
 bash "$TMP_DIR/driver.sh" "$CALLS" 'install_pyside6_packages'
 exit_code=$?
@@ -271,6 +346,62 @@ if grep -q "^curl:" "$TMP_DIR/calls-vendor_skip.txt"; then
     fail "при PYSIDE6_SKIP_VENDOR=true бандл всё равно скачивается"
 else
     pass "PYSIDE6_SKIP_VENDOR=true отключает скачивание бандла"
+fi
+
+# 10. Статус пароля: P, NP и пустой.
+for st in P NP empty; do
+    : > "$TMP_DIR/passwd-status-$st"
+    case "$st" in
+        P) printf 'P' > "$TMP_DIR/passwd-status-$st" ;;
+        NP) printf 'NP' > "$TMP_DIR/passwd-status-$st" ;;
+    esac
+    out=$(run_case_out "status_$st" "$TMP_DIR/os-steamos" 'user_password_status deck' \
+        env STUB_PASSWD_STATUS_FILE="$TMP_DIR/passwd-status-$st")
+    expected="$st"
+    [ "$st" = "empty" ] && expected=""
+    if [ "$out" = "$expected" ]; then
+        pass "статус пароля: '${st}' → '${expected}'"
+    else
+        fail "статус пароля '${st}' распознан как '${out}'"
+    fi
+done
+
+# 11. sudo без пароля: ничего не спрашиваем.
+out=$(run_case_out sudo_passwordless "$TMP_DIR/os-steamos" \
+    'prepare_sudo_credentials; printf "mode=%s\n" "$SUDO_PASSWORDLESS"' \
+    env STUB_SUDO_N_RC=0)
+if [ "$out" = "mode=true" ] && ! grep -qE "^passwd:|^rootzenity" "$TMP_DIR/calls-sudo_passwordless.txt"; then
+    pass "passwordless sudo: пароль и zenity не запрашиваются"
+else
+    fail "passwordless sudo: неожиданный результат '$out': $(tr '\n' ' ' < "$TMP_DIR/calls-sudo_passwordless.txt")"
+fi
+
+# 12. Пароля нет (NP): задаём через Zenity, затем sudo проверен.
+printf 'NP' > "$TMP_DIR/passwd-status-np"
+if run_case np_set_password "$TMP_DIR/os-steamos" 'prepare_sudo_credentials' \
+    env STUB_SUDO_N_RC=1 STUB_ZENITY_PASSWORD=secret STUB_PASSWD_STATUS_FILE="$TMP_DIR/passwd-status-np" \
+        DISPLAY=:0 STUB_SUDO_S_RC=0; then
+    if grep -q "passwd-set" "$TMP_DIR/calls-np_set_password.txt" \
+        && grep -q "sudo: -S -k true" "$TMP_DIR/calls-np_set_password.txt" \
+        && [ "$(cat "$TMP_DIR/passwd-status-np")" = "P" ]; then
+        pass "NP: пароль задан через Zenity и sudo проверен повторно"
+    else
+        fail "NP: пароль/sudo не сработали: $(tr '\n' ' ' < "$TMP_DIR/calls-np_set_password.txt")"
+    fi
+else
+    fail "NP: prepare_sudo_credentials вернула ошибку"
+fi
+
+# 13. Пароль верный, но прав sudo нет — показываем инструкцию.
+printf 'P' > "$TMP_DIR/passwd-status-rights"
+run_case no_sudo_rights "$TMP_DIR/os-steamos" \
+    'prepare_sudo_credentials >/dev/null && exit 1 || exit 0' \
+    env STUB_SUDO_N_RC=1 STUB_SUDO_S_RC=1 STUB_PASSWD_STATUS_FILE="$TMP_DIR/passwd-status-rights" \
+        STUB_SUDO_S_ERR="deck is not in the sudoers file." STUB_ZENITY_PASSWORD=secret DISPLAY=:0
+if grep -q "zenity-error" "$TMP_DIR/calls-no_sudo_rights.txt"; then
+    pass "нет прав sudo: выдана инструкция (Zenity)"
+else
+    fail "нет прав sudo: инструкция не показана: $(tr '\n' ' ' < "$TMP_DIR/calls-no_sudo_rights.txt")"
 fi
 
 echo ""

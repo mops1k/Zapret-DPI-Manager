@@ -109,6 +109,132 @@ steamos_prepare_pacman() {
 }
 # <<< steamos helpers
 
+# >>> sudo credential helpers (стенд tools/check_installer_steamos.sh извлекает этот блок)
+# Проверка пароля и прав sudo: SteamOS deck часто без пароля (passwd -S → NP),
+# тогда sudo -S не работает и установка пакетов падает. Значения паролей не логируются.
+SUDO_PASSWORDLESS=false
+
+# Статус пароля пользователя: P (есть), NP (нет), L (заблокирован), пусто (неизвестно).
+user_password_status() {
+    local user="$1"
+    command -v passwd >/dev/null 2>&1 || return 0
+    passwd -S "$user" 2>/dev/null | awk '{print $2}' | head -n 1
+}
+
+# sudo работает без пароля (NOPASSWD или кэш timestamp).
+is_passwordless_sudo() {
+    sudo -n true 2>/dev/null
+}
+
+# Вывод sudo означает, что у пользователя нет прав sudo, а не что пароль неверен.
+sudo_error_is_rights() {
+    local err="${1:-}"
+    printf '%s\n' "$err" | grep -Eqi "not in the sudoers|is not allowed to run|not allowed to execute|sudoers file|не в файле sudoers|не имеет прав"
+}
+
+# Ввод пароля: Zenity при наличии графической сессии, иначе терминал (read -s).
+ask_password() {
+    local title="$1"
+    local prompt="$2"
+    local password=""
+    if command -v zenity >/dev/null 2>&1 && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+        zenity --password --title="$title" --text="$prompt" 2>/dev/null
+        return 0
+    fi
+    printf '%s\n' "$prompt" >&2
+    read -r -s -p "Пароль: " password
+    printf '\n' >&2
+    printf '%s\n' "$password"
+}
+
+# Пользователю без пароля: запросить (Zenity или терминал) и задать пароль.
+set_missing_user_password() {
+    local first second
+    first=$(ask_password "Задать пароль администратора" \
+        "У пользователя $CURRENT_USER нет пароля. Придумайте пароль администратора:")
+    if [ -z "$first" ]; then
+        printf 'Пароль не задан.\n' >&2
+        return 1
+    fi
+    second=$(ask_password "Подтверждение пароля" "Повторите пароль администратора:")
+    if [ "$first" != "$second" ]; then
+        printf 'Пароли не совпадают.\n' >&2
+        return 1
+    fi
+    if printf '%s\n%s\n' "$first" "$first" | passwd "$CURRENT_USER" >>"$LOG_FILE" 2>&1; then
+        installer_log "Пароль пользователя $CURRENT_USER задан"
+        return 0
+    fi
+    installer_log "Не удалось задать пароль пользователю $CURRENT_USER"
+    printf 'Не удалось задать пароль (подробности: %s).\n' "$LOG_FILE" >&2
+    return 1
+}
+
+# Инструкция, как выдать пользователю права sudo (Zenity или терминал).
+show_sudo_rights_help() {
+    local text="Пользователь $CURRENT_USER не имеет прав sudo: установка пакетов и службы невозможна.\n\n"
+    text+="Выдайте права от имени root или другого администратора:\n"
+    text+="• SteamOS/Arch: sudo usermod -aG wheel $CURRENT_USER, затем в /etc/sudoers (через visudo): %wheel ALL=(ALL) ALL\n"
+    text+="• Debian/Ubuntu: sudo usermod -aG sudo $CURRENT_USER (в sudoers уже есть %sudo ALL=(ALL:ALL) ALL)\n"
+    text+="• Fedora: sudo usermod -aG wheel $CURRENT_USER\n"
+    text+="• Если sudo нет ни у кого: зайдите как root (su -) или в Desktop Mode от другого администратора и выполните команды выше.\n\n"
+    text+="После этого перезайдите в систему и запустите установщик снова."
+    if command -v zenity >/dev/null 2>&1 && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+        zenity --error --title="Нет прав sudo" --text="$(printf '%b' "$text")" --no-markup --width=520 2>/dev/null || true
+    else
+        printf '%b\n' "$text" >&2
+        printf 'Нажмите Enter для выхода...' >&2
+        [ -t 0 ] && read -r _ || true
+    fi
+}
+
+# Гарантирует готовые sudo-данные: sudo без пароля, либо пароль в SUDO_PASSWORD.
+# Если пароля у пользователя нет — предлагает задать его и проверяет права повторно.
+prepare_sudo_credentials() {
+    local status err rc attempt=1
+    SUDO_PASSWORDLESS=false
+    if is_passwordless_sudo; then
+        SUDO_PASSWORDLESS=true
+        installer_log "sudo работает без пароля (NOPASSWD или кэш)"
+        return 0
+    fi
+    status=$(user_password_status "$CURRENT_USER")
+    installer_log "Статус пароля пользователя $CURRENT_USER: ${status:-неизвестно}"
+    if [ "$status" = "NP" ] || [ "$status" = "L" ]; then
+        printf 'У пользователя %s нет пароля администратора.\n' "$CURRENT_USER" >&2
+        if ! set_missing_user_password; then
+            printf 'Пароль задать не удалось — установка невозможна.\n' >&2
+            show_message "Требуется пароль" "Не удалось задать пароль администратора.\nЗадайте его вручную командой passwd $CURRENT_USER и запустите установщик снова."
+            return 1
+        fi
+        status=$(user_password_status "$CURRENT_USER")
+        installer_log "Статус пароля после задания: ${status:-неизвестно}"
+    fi
+    while [ "$attempt" -le 3 ]; do
+        SUDO_PASSWORD=$(ask_password "Требуются права администратора" "Введите пароль sudo для $CURRENT_USER:")
+        if [ -z "$SUDO_PASSWORD" ]; then
+            printf 'Пароль не введён — установка отменена.\n' >&2
+            return 1
+        fi
+        err=$(printf '%s\n' "$SUDO_PASSWORD" | sudo -S -k true 2>&1 >/dev/null)
+        rc=$?
+        installer_log "Проверка sudo (код $rc)"
+        if [ "$rc" -eq 0 ]; then
+            return 0
+        fi
+        installer_log "sudo: $err"
+        if sudo_error_is_rights "$err"; then
+            show_sudo_rights_help
+            return 1
+        fi
+        printf 'Неверный пароль (попытка %s из 3).\n' "$attempt" >&2
+        attempt=$((attempt + 1))
+    done
+    printf 'Не удалось получить права администратора.\n' >&2
+    return 1
+}
+# <<< sudo credential helpers
+
 # >>> pyside6 install helpers (стенд tools/check_installer_steamos.sh извлекает этот блок по маркерам)
 pyside6_import_ok() {
     python3 -c "import PySide6.QtCore, PySide6.QtGui, PySide6.QtQml, PySide6.QtQuick, PySide6.QtQuickControls2" \
@@ -343,7 +469,7 @@ install_pyside6_packages() {
 USE_ZENITY=true
 ZENITY_INSTALLED=false
 
-# === ФУНКЦИЯ: Установка zenity если нет ===
+# === ФУНКЦИЯ: Установка zenity если нет (пароль уже получен в prepare_sudo_credentials) ===
 install_zenity_if_needed() {
     echo "Проверка наличия zenity..."
 
@@ -355,38 +481,6 @@ install_zenity_if_needed() {
     fi
 
     echo "Zenity не найден, пробуем установить..."
-    echo ""
-
-    # Сохраняем текущий пароль если он уже есть
-    local temp_password="$SUDO_PASSWORD"
-
-    # Если у нас еще нет пароля, запрашиваем его
-    if [ -z "$temp_password" ]; then
-        echo "Для установки Zenity требуются права администратора"
-        echo "Введите ваш пароль sudo:"
-        read -s temp_password
-        echo ""
-
-        if [ -z "$temp_password" ]; then
-            echo "Пароль не введен. Пропускаем установку Zenity."
-            ZENITY_INSTALLED=false
-            USE_ZENITY=false
-            return 1
-        fi
-
-        # Проверяем пароль
-        if ! echo "$temp_password" | sudo -S true 2>/dev/null; then
-            echo "Неверный пароль. Пропускаем установку Zenity."
-            ZENITY_INSTALLED=false
-            USE_ZENITY=false
-            return 1
-        fi
-
-        # Сохраняем верный пароль
-        SUDO_PASSWORD="$temp_password"
-    fi
-
-    echo "Пытаемся установить Zenity..."
 
     # SteamOS: /usr только для чтения — разблокируем на время установки (от root).
     local zenity_unlocked=false
@@ -399,36 +493,33 @@ install_zenity_if_needed() {
         fi
     fi
 
-    # Пробуем разные способы установки
+    # Пробуем разные способы установки: все команды — от root через run_sudo.
     local installed=false
-
     if command -v pacman &> /dev/null; then
         echo "Пробуем установить через pacman..."
-        if echo "$temp_password" | sudo -S pacman -S --noconfirm zenity >>"$LOG_FILE" 2>&1; then
+        if run_sudo pacman -S --noconfirm zenity >>"$LOG_FILE" 2>&1; then
             installed=true
         else
             echo "Не удалось установить через pacman, пробуем другой метод..."
-            # Пробуем с обновлением базы данных
-            echo "$temp_password" | sudo -S pacman -Syy --noconfirm >>"$LOG_FILE" 2>&1 || true
-            echo "$temp_password" | sudo -S pacman -S --noconfirm zenity >>"$LOG_FILE" 2>&1 || true
+            run_sudo pacman -Syy --noconfirm >>"$LOG_FILE" 2>&1 || true
+            run_sudo pacman -S --noconfirm zenity >>"$LOG_FILE" 2>&1 || true
         fi
     fi
 
-    # Проверяем другие пакетные менеджеры если pacman не сработал
-    if ! $installed && command -v apt &> /dev/null; then
+    if [ "$installed" != true ] && command -v apt &> /dev/null; then
         echo "Пробуем установить через apt..."
-        echo "$temp_password" | sudo -S apt update >>"$LOG_FILE" 2>&1 && \
-        echo "$temp_password" | sudo -S apt install -y zenity >>"$LOG_FILE" 2>&1 && installed=true
+        run_sudo apt update >>"$LOG_FILE" 2>&1 || true
+        run_sudo apt install -y zenity >>"$LOG_FILE" 2>&1 && installed=true
     fi
 
-    if ! $installed && command -v dnf &> /dev/null; then
+    if [ "$installed" != true ] && command -v dnf &> /dev/null; then
         echo "Пробуем установить через dnf..."
-        echo "$temp_password" | sudo -S dnf install -y zenity >>"$LOG_FILE" 2>&1 && installed=true
+        run_sudo dnf install -y zenity >>"$LOG_FILE" 2>&1 && installed=true
     fi
 
-    if ! $installed && command -v zypper &> /dev/null; then
+    if [ "$installed" != true ] && command -v zypper &> /dev/null; then
         echo "Пробуем установить через zypper..."
-        echo "$temp_password" | sudo -S zypper install -y zenity >>"$LOG_FILE" 2>&1 && installed=true
+        run_sudo zypper install -y zenity >>"$LOG_FILE" 2>&1 && installed=true
     fi
 
     # Возвращаем защиту /usr на SteamOS независимо от результата установки.
@@ -436,25 +527,22 @@ install_zenity_if_needed() {
         steamos_lock || true
     fi
 
-    # Проверяем, установился ли zenity
     if type zenity &> /dev/null; then
         ZENITY_INSTALLED=true
         USE_ZENITY=true
         echo ""
         echo "Zenity успешно установлен, используем графический интерфейс"
         return 0
-    else
-        ZENITY_INSTALLED=false
-        USE_ZENITY=false
-        echo ""
-        echo "Не удалось установить Zenity. Переходим в консольный режим."
-        echo "Установка будет продолжена без графического интерфейса."
-        echo "Нажмите Enter для продолжения..."
-        read
-        return 1
     fi
+    ZENITY_INSTALLED=false
+    USE_ZENITY=false
+    echo ""
+    echo "Не удалось установить Zenity. Переходим в консольный режим."
+    echo "Установка будет продолжена без графического интерфейса."
+    echo "Нажмите Enter для продолжения..."
+    read
+    return 1
 }
-
 
 # === ФУНКЦИЯ: Определение типа системы ===
 detect_system_type() {
@@ -555,18 +643,12 @@ ensure_base_dependencies() {
         return 1
     fi
 
-    if [ -z "$SUDO_PASSWORD" ]; then
-        if [ "$USE_ZENITY" = true ] && [ "$ZENITY_INSTALLED" = true ]; then
-            SUDO_PASSWORD=$(get_password "Требуются права администратора" "Введите пароль для установки зависимостей:" 2>/dev/null || true)
-        else
-            echo "Введите ваш пароль sudo для установки зависимостей:"
-            read -s SUDO_PASSWORD
-            echo ""
+    if [ -z "$SUDO_PASSWORD" ] && [ "$SUDO_PASSWORDLESS" != true ]; then
+        SUDO_PASSWORD=$(ask_password "Требуются права администратора" "Введите пароль sudo для установки зависимостей:")
+        if [ -z "$SUDO_PASSWORD" ]; then
+            echo "Пароль не введён — установка зависимостей пропущена" >&2
+            return 1
         fi
-    fi
-    if [ -z "$SUDO_PASSWORD" ]; then
-        echo "Пароль не введён — установка зависимостей пропущена" >&2
-        return 1
     fi
 
     # SteamOS: /usr только для чтения — установка пакетов только после разблокировки (от root).
@@ -662,40 +744,7 @@ install_pyside6_if_needed() {
         echo -e "$install_message"
     fi
 
-    local temp_password="$SUDO_PASSWORD"
-
-    if [ -z "$temp_password" ]; then
-        if [ "$USE_ZENITY" = true ] && [ "$ZENITY_INSTALLED" = true ]; then
-            SUDO_PASSWORD=$(get_password "Требуются права администратора" \
-                "Введите пароль для установки PySide6:")
-            temp_password="$SUDO_PASSWORD"
-            if [ -z "$temp_password" ]; then
-                local cancel_msg="Пароль не введён. Установка PySide6 пропущена.\nУстановите пакет вручную и при необходимости перезапустите установку."
-                local formatted_cancel
-                formatted_cancel=$(printf "%b" "$cancel_msg")
-                zenity --info --title="Пропуск" --text="$formatted_cancel" --no-markup --width=400 2>/dev/null || true
-                return 1
-            fi
-            if ! echo "$temp_password" | sudo -S true 2>/dev/null; then
-                zenity --error --title="Ошибка" --text="Неверный пароль. Установка PySide6 пропущена." --no-markup --width=400 2>/dev/null || true
-                return 1
-            fi
-        else
-            echo "Для установки PySide6 требуются права администратора"
-            echo "Введите ваш пароль sudo:"
-            read -s temp_password
-            echo ""
-            if [ -z "$temp_password" ]; then
-                echo "Пароль не введен. Пропускаем установку PySide6."
-                return 1
-            fi
-            if ! echo "$temp_password" | sudo -S true 2>/dev/null; then
-                echo "Неверный пароль. Пропускаем установку PySide6."
-                return 1
-            fi
-            SUDO_PASSWORD="$temp_password"
-        fi
-    fi
+    # Пароль и права sudo уже проверены в prepare_sudo_credentials.
 
     # SteamOS: /usr только для чтения — разблокируем ФС на время установки пакетов (от root).
     local steamos_unlocked=false
@@ -786,22 +835,6 @@ show_message() {
     fi
 }
 
-get_password() {
-    local title="$1"
-    local text="$2"
-
-    if [ "$USE_ZENITY" = true ] && [ "$ZENITY_INSTALLED" = true ]; then
-        zenity --password --title="$title" --text="$text" --no-markup 2>/dev/null
-    else
-        echo ""
-        echo ">>> $title <<<"
-        echo "$text"
-        read -s -p "Пароль: " password
-        echo ""
-        echo "$password"
-    fi
-}
-
 show_error() {
     local title="$1"
     local text="$2"
@@ -878,46 +911,16 @@ show_progress() {
     fi
 }
 
-# === ФУНКЦИЯ: Получение sudo доступа ===
+# === ФУНКЦИЯ: Получение sudo доступа (совместимость; основную проверку делает prepare_sudo_credentials) ===
 get_sudo_access() {
-    if ! sudo -n true 2>/dev/null; then
-        while true; do
-            if [ "$USE_ZENITY" = true ] && [ "$ZENITY_INSTALLED" = true ]; then
-                SUDO_PASSWORD=$(get_password "Требуются права администратора" \
-                    "Введите пароль для установки Zapret DPI Manager:")
-
-                if [ $? -ne 0 ]; then
-                    show_message "Отменено" "Установка Zapret DPI Manager отменена пользователем."
-                    exit 0
-                fi
-            else
-                echo ""
-                echo "=== ТРЕБУЮТСЯ ПРАВА АДМИНИСТРАТОРА ==="
-                echo "Введите пароль для установки Zapret DPI Manager:"
-                read -s SUDO_PASSWORD
-                echo ""
-            fi
-
-            if [ -z "$SUDO_PASSWORD" ]; then
-                if [ "$USE_ZENITY" = true ] && [ "$ZENITY_INSTALLED" = true ]; then
-                    show_error "Ошибка" "Пароль не может быть пустым! Попробуйте еще раз."
-                else
-                    echo "ОШИБКА: Пароль не может быть пустым! Попробуйте еще раз."
-                fi
-                continue
-            fi
-
-            if echo "$SUDO_PASSWORD" | sudo -S true 2>/dev/null; then
-                break
-            else
-                if [ "$USE_ZENITY" = true ] && [ "$ZENITY_INSTALLED" = true ]; then
-                    show_error "Ошибка" "Неверный пароль! Попробуйте еще раз."
-                else
-                    echo "ОШИБКА: Неверный пароль! Попробуйте еще раз."
-                fi
-            fi
-        done
+    if [ -n "$SUDO_PASSWORD" ] || [ "$SUDO_PASSWORDLESS" = true ]; then
+        return 0
     fi
+    if sudo -n true 2>/dev/null; then
+        SUDO_PASSWORDLESS=true
+        return 0
+    fi
+    prepare_sudo_credentials
 }
 
 # === ФУНКЦИЯ: Выполнение команд с sudo ===
@@ -1127,6 +1130,15 @@ echo "=== Zapret DPI Manager установка начата: $(date) ==="
 echo "Текущий пользователь: $CURRENT_USER"
 echo "Домашняя директория: $CURRENT_HOME"
 
+# Проверка пароля и прав sudo до всех привилегированных шагов:
+# на SteamOS у пользователя deck пароля обычно нет, без этого установка пакетов падает.
+if ! prepare_sudo_credentials; then
+    show_error "Установка отменена" "Нет прав администратора — установка невозможна."
+    exit 1
+fi
+
+# Пытаемся установить zenity если нет (необязательный шаг — установку не прерываем)
+install_zenity_if_needed || true
 # Пытаемся установить zenity если нет (необязательный шаг — установку не прерываем)
 install_zenity_if_needed || true
 
@@ -1382,10 +1394,10 @@ WantedBy=multi-user.target"
 
     echo "85"
     echo "# Запуск службы zapret..."
-    # Запуск службы не должен прерывать установку: в свежем config.txt ещё нет
-    # выбранной стратегии, starter.sh не создаёт правила NFQUEUE и выходит с
-    # кодом 1, поэтому systemctl start возвращает ошибку. При set -e установка
-    # обрывалась здесь — до создания ярлыков и включения автозапуска.
+    # Запуск службы не должен прерывать установку: даже на свежей установке
+    # starter.sh поднимает службу на стратегии по умолчанию General, но сбой
+    # старта (нет nftables, права, окружение) не должен обрывать установку при
+    # set -e — иначе не создались бы ярлыки и включение автозапуска.
     if ! run_sudo systemctl daemon-reload; then
         echo "# Внимание: systemctl daemon-reload завершился с ошибкой" >&2
     fi
@@ -1393,7 +1405,8 @@ WantedBy=multi-user.target"
         echo "# Служба zapret запущена"
     else
         echo "# Внимание: служба zapret не запустилась на первом старте" >&2
-        echo "# Это нормально без выбранной стратегии: включите службу в Zapret DPI Manager." >&2
+        echo "# Без выбранной стратегии служба работает на встроенной General — причина в другом." >&2
+        echo "# Журнал для диагностики: journalctl -u zapret.service -b --no-pager" >&2
     fi
     if run_sudo systemctl enable zapret.service; then
         echo "# Автозапуск службы zapret включён"
