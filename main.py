@@ -11,6 +11,12 @@ _current_dir = os.path.dirname(os.path.abspath(__file__))
 if _current_dir not in sys.path:
     sys.path.insert(0, _current_dir)
 
+# Поставляемый prebuilt-бандл PySide6/Qt (ассет релиза pyside6_vendor.tar.gz):
+# установщик распаковывает его в vendor/, чтобы не ставить системные пакеты.
+_vendor_dir = os.path.join(_current_dir, "vendor")
+if os.path.isdir(_vendor_dir) and _vendor_dir not in sys.path:
+    sys.path.insert(0, _vendor_dir)
+
 INSTALL_HINT = (
     "Не найден PySide6 (Qt Quick). Установите зависимости:\n"
     "  • Arch/SteamOS: sudo pacman -S pyside6 qt6-declarative\n"
@@ -18,6 +24,7 @@ INSTALL_HINT = (
     "      qml6-module-qtquick-controls qml6-module-qtquick-layouts \\n"
     "      qml6-module-qtquick-effects\n"
     "  • Fedora: sudo dnf install python3-pyside6 qt6-qtdeclarative\n"
+    "  • Или распакуйте ассет релиза pyside6_vendor.tar.gz в каталог vendor/ рядом с main.py\n"
 )
 
 

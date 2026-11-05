@@ -60,13 +60,28 @@
 
 Подробный лог установки зависимостей — `/tmp/zapret_install.log`.
 
+### Prebuilt PySide6 (без установки пакетов)
+
+Начиная с релизов с ассетом `pyside6_vendor.tar.gz` зависимости графического интерфейса
+приходят готовыми: бандл собирается в CI и публикуется ассетом релиза, установщик
+скачивает его, сверяет SHA256 по `SHA256SUMS`, распаковывает в
+`~/Zapret_DPI_Manager/vendor` и проверяет импорт Qt Quick.
+
+- Порядок выбора: **vendor-бандл** → пакет дистрибутива (`pyside6`/`qt6-declarative`) →
+  `pip` в `~/.local`. В первом случае системные пакеты не ставятся и `/usr` не трогается.
+- Обновление приложения каталог `vendor/` не заменяет: бандл ставится установщиком.
+- Локально бандл собирается `tools/build_vendor.sh` (нужен интернет; результат —
+  `dist/vendor/` и `dist/pyside6_vendor.tar.gz`).
+- Бандл содержит библиотеки Qt/PySide6 без изменений и тексты лицензий в `vendor/LICENSES`.
+
 ### Локальная установка без релиза (для проверки)
 
 Если релиз ещё не опубликован (страница Releases пуста), пакеты собираются локально:
 
 1. `tools/build_release.sh` — создаёт `dist/Zapret_DPI_Manager.tar.gz` (полный пакет),
    `dist/zapret_updater.tar.gz` (для автообновления) и пересобирает `install_zapret.tar.gz`
-   из `installer/install_zapret.sh`.
+   из `installer/install_zapret.sh`; `tools/build_vendor.sh` добавляет
+   `dist/pyside6_vendor.tar.gz` (prebuilt PySide6).
 2. Распакуйте `dist/Zapret_DPI_Manager.tar.gz` в `~/Zapret_DPI_Manager` и положите нужную
    стратегию в `config.txt` (файл из `files/strategy/`).
 3. Служба ставится из менеджера (пункт **«Обновить Zapret»**) или вручную: скопируйте

@@ -115,6 +115,90 @@ pyside6_import_ok() {
         >>"$LOG_FILE" 2>&1
 }
 
+# === Prebuilt-бандл PySide6 (ассет релиза, собирается в CI) ===
+VENDOR_BUNDLE_ASSET="${VENDOR_BUNDLE_ASSET:-pyside6_vendor.tar.gz}"
+PYSIDE6_VENDOR_READY=false
+PYSIDE6_VENDOR_DIR=""
+
+vendor_bundle_url() {
+    printf '%s\n' "${ZAPRET_VENDOR_URL:-https://github.com/mops1k/Zapret-DPI-Manager/releases/latest/download/$VENDOR_BUNDLE_ASSET}"
+}
+
+# Скачивает URL в файл: curl, при его отсутствии — wget.
+# Таймауты небольшие: если GitHub недоступен, установщик быстро перейдёт к резервному пути.
+fetch_url() {
+    local url="$1"
+    local out="$2"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --retry 1 --retry-delay 1 --connect-timeout 10 --max-time 600 -o "$out" "$url"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -T 15 -t 2 -O "$out" "$url"
+    else
+        return 1
+    fi
+}
+
+file_sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    fi
+}
+
+# Скачивает prebuilt-бандл PySide6, сверяет SHA256 (если SHA256SUMS доступен),
+# распаковывает и проверяет импорт. Печатает путь к vendor-каталогу или ничего.
+pyside6_vendor_prepare() {
+    local work_dir archive url sums expected actual vendor_dir
+    if [ "${PYSIDE6_SKIP_VENDOR:-false}" = true ]; then
+        return 1
+    fi
+    work_dir=$(mktemp -d 2>/dev/null) || return 1
+    archive="$work_dir/$VENDOR_BUNDLE_ASSET"
+    url=$(vendor_bundle_url)
+    echo "# Проверка поставляемого PySide6 (vendor-бандл)..." >&2
+    if ! fetch_url "$url" "$archive" >>"$LOG_FILE" 2>&1; then
+        installer_log "vendor: не удалось скачать $url"
+        rm -rf "$work_dir"
+        return 1
+    fi
+    sums="$work_dir/SHA256SUMS"
+    if fetch_url "${url%/*}/SHA256SUMS" "$sums" >>"$LOG_FILE" 2>&1; then
+        expected=$(awk -v name="$VENDOR_BUNDLE_ASSET" '$2 == name {print $1; exit}' "$sums" 2>/dev/null)
+        if [ -n "$expected" ]; then
+            actual=$(file_sha256 "$archive")
+            if [ -z "$actual" ] || [ "$expected" != "$actual" ]; then
+                installer_log "vendor: SHA256 не совпал (ожидался $expected, получен ${actual:-пусто})"
+                rm -rf "$work_dir"
+                return 1
+            fi
+            installer_log "vendor: SHA256 совпал"
+        else
+            installer_log "vendor: в SHA256SUMS нет записи для $VENDOR_BUNDLE_ASSET"
+        fi
+    else
+        installer_log "vendor: SHA256SUMS недоступен, проверка целостности пропущена"
+    fi
+    if ! tar -xzf "$archive" -C "$work_dir" >>"$LOG_FILE" 2>&1; then
+        installer_log "vendor: не удалось распаковать $archive"
+        rm -rf "$work_dir"
+        return 1
+    fi
+    vendor_dir="$work_dir/vendor"
+    if [ ! -d "$vendor_dir/PySide6" ]; then
+        installer_log "vendor: в архиве нет каталога vendor/PySide6"
+        rm -rf "$work_dir"
+        return 1
+    fi
+    if ! PYTHONPATH="$vendor_dir" pyside6_import_ok; then
+        installer_log "vendor: импорт PySide6 из бандла не удался"
+        rm -rf "$work_dir"
+        return 1
+    fi
+    installer_log "vendor: бандл готов: $vendor_dir"
+    printf '%s\n' "$vendor_dir"
+}
+
 # Есть ли пакет в репозитории текущего пакетного менеджера.
 package_in_repo() {
     local pkg="$1"
@@ -522,6 +606,16 @@ install_pyside6_if_needed() {
         echo "PySide6 найден"
         return 0
     fi
+
+    # Приоритет — поставляемый prebuilt-бандл: системные пакеты и /usr не трогаем вообще.
+    local vendor_dir=""
+    if vendor_dir=$(pyside6_vendor_prepare); then
+        PYSIDE6_VENDOR_READY=true
+        PYSIDE6_VENDOR_DIR="$vendor_dir"
+        echo "Используется поставляемый PySide6 (vendor-бандл)"
+        return 0
+    fi
+    PYSIDE6_VENDOR_READY=false
 
     if [ -z "$SYSTEM_TYPE" ]; then
         detect_system_type || true
@@ -1036,6 +1130,9 @@ echo "Домашняя директория: $CURRENT_HOME"
 # Пытаемся установить zenity если нет (необязательный шаг — установку не прерываем)
 install_zenity_if_needed || true
 
+# Целевой каталог нужен уже на этапе зависимостей: туда кладётся vendor-бандл PySide6.
+TARGET_DIR="$CURRENT_HOME/Zapret_DPI_Manager"
+
 # Проверка и при необходимости установка PySide6 (QML); для rpm-ostree — установка в слой
 install_pyside6_if_needed || true
 
@@ -1061,7 +1158,6 @@ if [ -d "$OLD_ZAPRET_DIR" ]; then
 fi
 
 # Проверяем наличие старой папки Zapret DPI Manager
-TARGET_DIR="$CURRENT_HOME/Zapret_DPI_Manager"
 if [ -d "$TARGET_DIR" ]; then
     echo "Найдена старая папка Zapret DPI Manager: $TARGET_DIR"
 
@@ -1150,6 +1246,22 @@ set -o pipefail
 
     chown -R "$CURRENT_USER:$CURRENT_USER" "$TARGET_DIR"
     echo "Файлы распакованы в: $TARGET_DIR"
+
+    if [ "${PYSIDE6_VENDOR_READY:-false}" = true ] && [ -n "${PYSIDE6_VENDOR_DIR:-}" ] && [ -d "$PYSIDE6_VENDOR_DIR" ]; then
+        echo "45"
+        echo "# Установка поставляемого PySide6 (vendor-бандл)..."
+        mkdir -p "$TARGET_DIR/vendor"
+        if cp -a "$PYSIDE6_VENDOR_DIR/." "$TARGET_DIR/vendor/" >>"$LOG_FILE" 2>&1; then
+            chown -R "$CURRENT_USER:$CURRENT_USER" "$TARGET_DIR/vendor" 2>/dev/null || true
+            rm -rf "$(dirname "$PYSIDE6_VENDOR_DIR")" 2>/dev/null || true
+            echo "# PySide6 (vendor) установлен в $TARGET_DIR/vendor"
+        else
+            echo "Внимание: не удалось скопировать vendor-бандл — ставим PySide6 пакетом/pip" >&2
+            PYSIDE6_VENDOR_READY=false
+            PYSIDE6_SKIP_VENDOR=true
+            install_pyside6_packages >>"$LOG_FILE" 2>&1 || true
+        fi
+    fi
 
     echo "50"
     echo "# Установка системных файлов..."
@@ -1484,7 +1596,11 @@ echo "Установка завершена успешно"
 
 # Проверка GUI-зависимостей после установки: без PySide6 и QML-файлов менеджер не запустится.
 QML_GUI_OK=false
-if python3 -c "import PySide6.QtCore, PySide6.QtGui, PySide6.QtQml, PySide6.QtQuick, PySide6.QtQuickControls2" 2>/dev/null; then
+GUI_IMPORT_PATH="$TARGET_DIR"
+if [ -d "$TARGET_DIR/vendor" ]; then
+    GUI_IMPORT_PATH="$TARGET_DIR/vendor"
+fi
+if PYTHONPATH="$GUI_IMPORT_PATH" python3 -c "import PySide6.QtCore, PySide6.QtGui, PySide6.QtQml, PySide6.QtQuick, PySide6.QtQuickControls2" 2>/dev/null; then
     if [ -f "$TARGET_DIR/qml/main.qml" ] && [ -f "$TARGET_DIR/qmlui/app.py" ]; then
         QML_GUI_OK=true
         echo "GUI-зависимости на месте: PySide6 и QML-файлы найдены"
@@ -1496,7 +1612,7 @@ else
 fi
 if [ "$QML_GUI_OK" != true ]; then
     show_message "Не хватает зависимостей" \
-        "Графический интерфейс может не запуститься.\n\nПроверьте, что установлен PySide6 с QML-модулями:\n• Arch/SteamOS: sudo pacman -S pyside6 qt6-declarative\n• Debian/Ubuntu: sudo apt install python3-pyside6.qml qml6-module-qtquick-controls qml6-module-qtquick-layouts qml6-module-qtquick-effects\n• Fedora: sudo dnf install python3-pyside6 qt6-qtdeclarative\n• Любая система (если пакета нет в репозитории): python3 -m pip install --user PySide6\n\nПодробности установки: /tmp/zapret_install.log"
+        "Графический интерфейс может не запуститься.\n\nПроверьте, что установлен PySide6 с QML-модулями:\n• Arch/SteamOS: sudo pacman -S pyside6 qt6-declarative\n• Debian/Ubuntu: sudo apt install python3-pyside6.qml qml6-module-qtquick-controls qml6-module-qtquick-layouts qml6-module-qtquick-effects\n• Fedora: sudo dnf install python3-pyside6 qt6-qtdeclarative\n• Любая система (если пакета нет в репозитории): python3 -m pip install --user PySide6\n• Или скачайте pyside6_vendor.tar.gz из релиза и распакуйте каталог vendor в $TARGET_DIR\n\nПодробности установки: /tmp/zapret_install.log"
 fi
 
 # Очистка временных файлов PySide6

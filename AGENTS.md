@@ -3,15 +3,20 @@
 ## Сборка и релиз
 
 - Сборка пакетов: `tools/build_release.sh` → `dist/Zapret_DPI_Manager.tar.gz` (полный пакет;
-  в обоих архивах — `main.py`, `core/`, `qml/`, `qmlui/`; установщик ставит `pyside6`/`qt6-declarative`)
-  и `dist/zapret_updater.tar.gz` (автообновление, без `config.txt` и `files/lists/*_user.txt`);
-  из `installer/install_zapret.sh` пересобирается `install_zapret.tar.gz`. В оба архива входит
-  каталог `warp/` (скрипты и юнит WARP), сборка проверяет его состав.
+  в обоих архивах — `main.py`, `core/`, `qml/`, `qmlui/`; установщик ставит `pyside6`/`qt6-declarative`
+  или распаковывает prebuilt-бандл) и `dist/zapret_updater.tar.gz` (автообновление, без `config.txt`
+  и `files/lists/*_user.txt`); из `installer/install_zapret.sh` пересобирается `install_zapret.tar.gz`.
+  В оба архива входит каталог `warp/` (скрипты и юнит WARP), сборка проверяет его состав.
+- Prebuilt PySide6/Qt: `tools/build_vendor.sh` скачивает закреплённые abi3-колёса
+  (`PySide6-Essentials` + `shiboken6`, `manylinux_2_34_x86_64`), собирает `dist/vendor/` и
+  `dist/pyside6_vendor.tar.gz`. Бандл собирается **в CI** (workflow релиза) и публикуется
+  ассетом релиза вместе с `SHA256SUMS`; версия PySide6 пинится в скрипте
+  (`PYSIDE_VERSION`, по умолчанию 6.12.0).
 - Версия хранится в `version.txt` (строка 1) и дублируется в `core/manager_config.py`
   (`current_version`) — менять синхронно. Строка 2 `version.txt` — URL архива обновления.
 - Релиз публикуется workflow `.github/workflows/release.yml` (тег `v*` или ручной запуск);
-  тег обязан совпадать с `version.txt`. В релиз входят оба архива и `SHA256SUMS`.
-- Пуш и публикация релиза — только по прямой просьбе пользователя.
+  тег обязан совпадать с `version.txt`. В релиз входят оба архива, `pyside6_vendor.tar.gz`
+  и `SHA256SUMS`; без ассета бандла релиз не публикуется.
 
 ## Установщик и зависимости
 
@@ -23,10 +28,14 @@
   `install_pyside6_if_needed`, `ensure_base_dependencies` и основной блок установки.
   На SteamOS перед установкой также снимаются устаревшие `db.lck`, выполняются
   `pacman-key --init`, `pacman-key --populate archlinux`, `pacman -Sy`.
-- PySide6: сначала пакет ОС (`pyside6 qt6-declarative` на Arch/SteamOS), при отсутствии
-  пакета в репозитории или ошибке `pacman` — pip-фолбэк в `~/.local`
-  (`PySide6-Essentials`, затем полный `PySide6`). Результат проверяется импортом
+- PySide6: приоритет — prebuilt-бандл (`pyside6_vendor.tar.gz` из релиза, с проверкой
+  SHA256 и импорта; распаковывается в `~/Zapret_DPI_Manager/vendor`, `main.py` добавляет
+  `vendor/` в `sys.path`). Если бандла нет или импорт не прошёл — пакет ОС
+  (`pyside6 qt6-declarative` на Arch/SteamOS), при отсутствии пакета в репозитории или
+  ошибке `pacman` — pip-фолбэк в `~/.local` (`PySide6-Essentials`, затем полный `PySide6`).
+  Результат всегда проверяется импортом
   `PySide6.QtCore/QtGui/QtQml/QtQuick/QtQuickControls2`. Лог — `/tmp/zapret_install.log`.
+  Обновление приложения каталог `vendor/` не заменяет (`core/manager_updater.exclude_from_update`).
 - Стенд `tools/check_installer_steamos.sh` извлекает функции по маркерам
   `# >>> steamos helpers` и `# >>> pyside6 install helpers` — маркеры не переименовывать.
 
@@ -42,7 +51,8 @@ python3 tools/convert_flowseal_strategies.py --check
 python3 tools/check_bbdpi_convert.py               # конвертер BB DPI (ciadpi) → nfqws + dry-run
 python3 tools/check_github_fetch.py                # цепочка провайдеров core/github_fetch.py (без сети)
 python3 tools/check_tgws.py                         # стенд движка TG WS Proxy (obfuscated2 + WS + мост, без сети)
-bash tools/check_installer_steamos.sh               # стенд установщика: unlock→install→lock и pip-фолбэк PySide6
+bash tools/check_installer_steamos.sh               # стенд установщика: unlock→install→lock, pip-фолбэк и vendor-бандл
+bash -n tools/build_vendor.sh                       # синтаксис сборки prebuilt PySide6 (сеть нужна только при запуске)
 ruff check core qmlui tools main.py                # конфиг в pyproject.toml
 QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software python3 main.py --selftest  # дымовой тест QML-интерфейса (83 проверки)
 ```

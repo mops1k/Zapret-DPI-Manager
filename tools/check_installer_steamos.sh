@@ -53,6 +53,42 @@ exit 0
 EOF
 chmod +x "$TMP_DIR/bin/steamos-readonly"
 
+# Подменный curl: отдаёт заранее собранные «ассеты релиза» (бандл и SHA256SUMS).
+cat > "$TMP_DIR/bin/curl" <<'EOF'
+#!/bin/bash
+out=""
+url=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -o) out="$2"; shift 2 ;;
+        --retry) shift 2 ;;
+        -*) shift ;;
+        *) url="$1"; shift ;;
+    esac
+done
+printf 'curl: %s\n' "$url" >> "$CALLS"
+case "$url" in
+    */SHA256SUMS)
+        [ -n "${STUB_VENDOR_SUMS:-}" ] || exit 22
+        cp "$STUB_VENDOR_SUMS" "$out"
+        ;;
+    *)
+        [ -n "${STUB_VENDOR_ARCHIVE:-}" ] || exit 22
+        cp "$STUB_VENDOR_ARCHIVE" "$out"
+        ;;
+esac
+EOF
+chmod +x "$TMP_DIR/bin/curl"
+
+# Фикстуры: «бандл» с vendor/PySide6 и SHA256SUMS к нему.
+mkdir -p "$TMP_DIR/vendor_stage/vendor/PySide6/Qt/qml/QtQuick"
+: > "$TMP_DIR/vendor_stage/vendor/PySide6/__init__.py"
+tar czf "$TMP_DIR/pyside6_vendor.tar.gz" -C "$TMP_DIR/vendor_stage" vendor
+VENDOR_SHA="$(sha256sum "$TMP_DIR/pyside6_vendor.tar.gz" | awk '{print $1}')"
+printf '%s  pyside6_vendor.tar.gz\n' "$VENDOR_SHA" > "$TMP_DIR/SHA256SUMS"
+printf '%s  pyside6_vendor.tar.gz\n' "0000000000000000000000000000000000000000000000000000000000000000" \
+    > "$TMP_DIR/SHA256SUMS.bad"
+
 # Драйвер: подменяет run_sudo и python3, логирует вызовы, подключает извлечённые функции.
 cat > "$TMP_DIR/driver.sh" <<'EOF'
 #!/bin/bash
@@ -60,6 +96,7 @@ set -u
 CALLS="$1"
 COMMAND="$2"
 : > "$CALLS"
+export CALLS
 
 run_sudo() {
     printf 'run_sudo: %s\n' "$*" >> "$CALLS"
@@ -198,6 +235,42 @@ if [ "$exit_code" -eq 0 ]; then
     fail "install_pyside6_packages вернула успех при полном провале"
 else
     pass "при полном провале install_pyside6_packages возвращает ошибку"
+fi
+
+# 7. Prebuilt-бандл: скачивание, SHA256 и импорт проверены — путь к vendor возвращён.
+if run_case vendor_ok "$TMP_DIR/os-steamos" \
+    'vendor_dir=$(pyside6_vendor_prepare) && [ -d "$vendor_dir/PySide6" ]' \
+    env STUB_VENDOR_ARCHIVE="$TMP_DIR/pyside6_vendor.tar.gz" \
+        STUB_VENDOR_SUMS="$TMP_DIR/SHA256SUMS" \
+        STUB_IMPORT_RC=0; then
+    if grep -q "vendor: SHA256 совпал" "$TMP_DIR/log-vendor_ok.txt"; then
+        pass "vendor-бандл: SHA256 проверен, vendor/PySide6 распакован"
+    else
+        fail "vendor-бандл распакован, но SHA256 не проверялся"
+    fi
+else
+    fail "vendor-бандл не подготовился: $(tr '\n' ' ' < "$TMP_DIR/calls-vendor_ok.txt" 2>/dev/null)"
+fi
+
+# 8. Несовпавший SHA256 блокирует использование бандла.
+run_case vendor_bad_sha "$TMP_DIR/os-steamos" \
+    'pyside6_vendor_prepare >/dev/null && exit 1 || exit 0' \
+    env STUB_VENDOR_ARCHIVE="$TMP_DIR/pyside6_vendor.tar.gz" \
+        STUB_VENDOR_SUMS="$TMP_DIR/SHA256SUMS.bad"
+if grep -q "vendor: SHA256 не совпал" "$TMP_DIR/log-vendor_bad_sha.txt"; then
+    pass "vendor-бандл с неверным SHA256 отвергнут"
+else
+    fail "бандл с неверным SHA256 не был отвергнут"
+fi
+
+# 9. PYSIDE6_SKIP_VENDOR=true — бандл не скачивается (резервный путь пакет/pip).
+run_case vendor_skip "$TMP_DIR/os-steamos" \
+    'pyside6_vendor_prepare >/dev/null && exit 1 || exit 0' \
+    env PYSIDE6_SKIP_VENDOR=true
+if grep -q "^curl:" "$TMP_DIR/calls-vendor_skip.txt"; then
+    fail "при PYSIDE6_SKIP_VENDOR=true бандл всё равно скачивается"
+else
+    pass "PYSIDE6_SKIP_VENDOR=true отключает скачивание бандла"
 fi
 
 echo ""

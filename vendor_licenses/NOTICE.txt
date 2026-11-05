@@ -1,0 +1,20 @@
+Zapret DPI Manager — prebuilt-бандл PySide6/Qt
+==============================================
+
+Каталог vendor/ содержит неизменённые библиотеки PySide6 (Qt for Python) и Qt 6,
+взятые из официальных колёс PyPI:
+
+  • PySide6-Essentials 6.12.0 (cp310-abi3-manylinux_2_34_x86_64)
+  • shiboken6 6.12.0         (cp310-abi3-manylinux_2_34_x86_64)
+
+Исходный код и условия лицензирования:
+
+  • Qt for Python (PySide6): https://code.qt.io/cgit/pyside/pyside-setup.git/
+    лицензия LGPL-3.0-only (см. LGPL-3.0-only.txt), а также GPL-3.0-only и
+    коммерческая лицензия Qt.
+  • Qt: https://code.qt.io/cgit/qt/ ; https://www.qt.io/licensing/
+  • Страница загрузки колёс: https://pypi.org/project/PySide6-Essentials/
+
+Библиотеки распространяются без изменений. Заменить их можно любым из способов:
+установить пакеты дистрибутива (pyside6/qt6-declarative), установить PySide6 через
+pip или заменить файлы в каталоге vendor/ на собранные самостоятельно из исходников.

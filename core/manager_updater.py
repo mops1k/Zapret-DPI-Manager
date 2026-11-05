@@ -21,6 +21,8 @@ class ManagerUpdater(BaseUpdater):
         # Файлы и папки, которые НЕ должны заменяться при обновлении
         self.exclude_from_update = [
             "config.txt",
+            # Prebuilt-бандл PySide6/Qt: ставится установщиком, обновление его не трогает.
+            "vendor",
             "utils/chosen_strategies.txt",
             "utils/name_strategy.txt",
             "utils/working_strategies.txt",
