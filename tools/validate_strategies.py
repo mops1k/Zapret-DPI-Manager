@@ -16,9 +16,12 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -194,6 +197,56 @@ def check_format() -> list[str]:
     return problems
 
 
+def check_default_strategy() -> list[str]:
+    """Стратегия по умолчанию: файл есть, пустой config.txt им заполняется.
+
+    По этой стратегии служба стартует сразу после установки, пока пользователь
+    ничего не выбрал, поэтому имя в core/strategy_data.py и starter.sh обязано
+    совпадать, а сам файл — существовать в поставке.
+    """
+    from core.strategy_data import DEFAULT_STRATEGY_NAME, ensure_default_strategy
+
+    problems: list[str] = []
+    default_file = STRATEGY_DIR / DEFAULT_STRATEGY_NAME
+    if not default_file.is_file():
+        return [f"нет файла стратегии по умолчанию: files/strategy/{DEFAULT_STRATEGY_NAME}"]
+
+    starter_text = STARTER.read_text(encoding="utf-8")
+    if f'DEFAULT_STRATEGY_NAME="{DEFAULT_STRATEGY_NAME}"' not in starter_text:
+        problems.append(
+            f"starter.sh не использует стратегию по умолчанию {DEFAULT_STRATEGY_NAME} "
+            f"(ожидается DEFAULT_STRATEGY_NAME=\"{DEFAULT_STRATEGY_NAME}\")"
+        )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        manager = Path(tmp)
+        (manager / "files" / "strategy").mkdir(parents=True)
+        (manager / "utils").mkdir()
+        (manager / "config.txt").write_text("", encoding="utf-8")
+        (manager / "files" / "strategy" / DEFAULT_STRATEGY_NAME).write_text(
+            default_file.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            applied = ensure_default_strategy(manager)
+        if applied != DEFAULT_STRATEGY_NAME:
+            problems.append(f"стратегия по умолчанию не включилась: получено {applied!r}")
+        elif not (manager / "config.txt").read_text(encoding="utf-8").strip():
+            problems.append("config.txt остался пустым после стратегии по умолчанию")
+        name_file = manager / "utils" / "name_strategy.txt"
+        if not name_file.is_file() or name_file.read_text(encoding="utf-8").strip() != DEFAULT_STRATEGY_NAME:
+            problems.append("name_strategy.txt не обновился стратегией по умолчанию")
+
+        # Заполненный config.txt (пользовательская стратегия) не перезаписывается.
+        (manager / "config.txt").write_text(
+            "--filter-tcp=443 --dpi-desync=fake --new\n", encoding="utf-8"
+        )
+        with contextlib.redirect_stdout(io.StringIO()):
+            if ensure_default_strategy(manager):
+                problems.append("выбранная стратегия перезаписана стратегией по умолчанию")
+    return problems
+
+
 def dry_run(arch: str) -> list[str]:
     binary = REPO_ROOT / "zapret" / "bins" / arch / "nfqws"
     if not binary.is_file():
@@ -228,7 +281,7 @@ def main() -> int:
     parser.add_argument("--arch", default="x86_64", help="архитектура nfqws для --dry-run (по умолчанию x86_64)")
     args = parser.parse_args()
 
-    problems = check_placeholders() + check_format()
+    problems = check_placeholders() + check_format() + check_default_strategy()
     if args.dry_run:
         problems += dry_run(args.arch)
 

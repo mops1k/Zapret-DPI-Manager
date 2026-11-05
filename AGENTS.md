@@ -25,7 +25,15 @@
 ## Установщик и зависимости
 
 - Все привилегированные команды — от root: в приложении `core/sudo_helper.run_sudo`
-  (`sudo -A`), в `installer/install_zapret.sh` — `run_sudo` (`sudo -S` с паролем из установщика).
+  (`sudo -A`), в `installer/install_zapret.sh` — `run_sudo` (`sudo -S` с паролем из установщика
+  либо обычный `sudo`, если `sudo -n true` работает).
+- Пароль администратора: в начале установки `prepare_sudo_credentials` проверяет
+  `sudo -n true` (passwordless) и статус пароля (`passwd -S`: `P`/`NP`/`L`). При `NP`/`L`
+  предлагает задать пароль (Zenity, иначе терминал — общий `ask_password`) и повторно
+  проверяет sudo; если sudo отвечает «not in the sudoers file», показывает инструкцию,
+  как выдать права (группа `wheel`/`sudo` и строка в `/etc/sudoers`). Значения паролей
+  не логируются. Ранние шаги (zenity, PySide6, базовые зависимости) повторно пароль не
+  спрашивают.
 - Valve SteamOS (`ID=steamos` в `/etc/os-release`) держит `/usr` только для чтения, поэтому
   каждый путь установки пакетов в установщике идёт по контракту
   `steamos_unlock` → установка → `steamos_lock`: `install_zenity_if_needed`,
@@ -55,7 +63,8 @@ python3 tools/convert_flowseal_strategies.py --check
 python3 tools/check_bbdpi_convert.py               # конвертер BB DPI (ciadpi) → nfqws + dry-run
 python3 tools/check_github_fetch.py                # цепочка провайдеров core/github_fetch.py (без сети)
 python3 tools/check_tgws.py                         # стенд движка TG WS Proxy (obfuscated2 + WS + мост, без сети)
-bash tools/check_installer_steamos.sh               # стенд установщика: unlock→install→lock, pip-фолбэк и vendor-бандл
+bash tools/check_installer_steamos.sh               # стенд установщика: unlock→install→lock, pip-фолбэк, vendor-бандл, пароль/права sudo
+bash tools/check_starter.sh                          # стенд starter.sh: стратегия по умолчанию, --filter-*=*, заглушки nft/nfqws (без root)
 bash -n tools/build_vendor.sh                       # синтаксис сборки prebuilt PySide6 (сеть нужна только при запуске)
 ruff check core qmlui tools main.py                # конфиг в pyproject.toml
 QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software python3 main.py --selftest  # дымовой тест QML-интерфейса (83 проверки)
@@ -83,6 +92,15 @@ CI (`.github/workflows/ci.yml`) выполняет те же шаги: став�
   регистрирует порт — QML-экраны сообщают о результатах сами).
 - Служба: `/etc/systemd/system/zapret.service`, `Type=oneshot`, `RemainAfterExit=yes`,
   `ExecStart=/bin/bash /opt/zapret/starter.sh`, `ExecStop=/bin/bash /opt/zapret/stopper.sh`.
+- Стратегия по умолчанию `General`: `starter.sh` собирает правила функцией `collect_args`
+  (`config.txt`), и если файл пуст (свежая установка — в архиве лежит пустой `config.txt`),
+  берёт `files/strategy/General` и пишет в журнал `применяю стратегию по умолчанию: General`.
+  Имя обязано совпадать в `zapret/system/starter.sh` (`DEFAULT_STRATEGY_NAME`) и
+  `core/strategy_data.py` (`DEFAULT_STRATEGY_NAME`), это проверяет `tools/validate_strategies.py`;
+  при первом запуске окна `core.strategy_data.ensure_default_strategy()` записывает `General`
+  в `config.txt` и `utils/name_strategy.txt`, чтобы интерфейс показывал работающую стратегию.
+- `--filter-tcp=*` / `--filter-udp=*` (варианты конструктора стратегий) — «все порты»:
+  правило NFQUEUE создаётся без `dport`/`sport` (nftables) и без `-m multiport` (iptables).
 - FWTYPE — единый источник истины `core/platform_info.detect_fwtype()` (nft → `nftables`,
   иначе `iptables`). Правила живут в собственной цепочке `ZAPRET` / таблице `inet zapret`,
   чужие правила (Docker/VPN/firewalld) не трогаются.

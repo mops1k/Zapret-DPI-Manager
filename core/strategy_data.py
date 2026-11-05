@@ -319,6 +319,51 @@ def get_strategy_command(category, strategy_name):
         print(f"Ошибка получения команды стратегии: {e}")
         return ""
 
+
+#: Стратегия, которая включается, пока пользователь ничего не выбрал.
+#: Должна совпадать с DEFAULT_STRATEGY_NAME в zapret/system/starter.sh: по ней
+#: служба поднимается сразу после установки, без открытия окна менеджера.
+DEFAULT_STRATEGY_NAME = "General"
+
+
+def ensure_default_strategy(manager_dir=None):
+    """Включает стратегию по умолчанию, если стратегия ещё не выбрана.
+
+    Свежая установка кладёт пустой config.txt, и служба до выбора стратегии
+    работает по встроенному профилю starter.sh. Чтобы состояние в менеджере и
+    в config.txt совпадало, при первом запуске окна пустой config.txt
+    заполняется стратегией DEFAULT_STRATEGY_NAME.
+
+    Возвращает имя включённой стратегии либо пустую строку, если менять нечего.
+    """
+    base = manager_dir or os.path.expanduser("~/Zapret_DPI_Manager")
+    config_path = os.path.join(base, "config.txt")
+    strategy_path = os.path.join(base, "files", "strategy", DEFAULT_STRATEGY_NAME)
+    name_path = os.path.join(base, "utils", "name_strategy.txt")
+
+    try:
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                if f.read().strip():
+                    return ""
+        if not os.path.isfile(strategy_path):
+            return ""
+        with open(strategy_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        if len(content.strip()) < 10:
+            return ""
+
+        os.makedirs(os.path.dirname(name_path), exist_ok=True)
+        with open(config_path, "w", encoding="utf-8") as f:
+            f.write(content if content.endswith("\n") else content + "\n")
+        with open(name_path, "w", encoding="utf-8") as f:
+            f.write(DEFAULT_STRATEGY_NAME)
+        print(f"Стратегия не выбрана — включена стратегия по умолчанию: {DEFAULT_STRATEGY_NAME}")
+        return DEFAULT_STRATEGY_NAME
+    except OSError as e:
+        print(f"Ошибка включения стратегии по умолчанию: {e}")
+        return ""
+
 def clear_empty_strategies():
     """Очищает файлы стратегий если config.txt пустой"""
     try:

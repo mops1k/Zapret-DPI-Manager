@@ -40,6 +40,9 @@ jobs:
       - name: WARP scripts on the stub stand
         run: sudo bash tools/check_warp_scripts.sh
 
+      - name: zapret starter.sh on the stub stand
+        run: bash tools/check_starter.sh
+
       - name: QML self-test (offscreen)
         env:
           QT_QPA_PLATFORM: offscreen

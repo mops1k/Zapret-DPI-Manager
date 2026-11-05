@@ -109,6 +109,24 @@ def run() -> int:
     theme = get_qt_theme()
     backend = Backend()
 
+    # Первый запуск: стратегия ещё не выбрана (config.txt пуст) — включаем
+    # стратегию по умолчанию, по которой служба уже работает из starter.sh.
+    # В самопроверке файлы пользователя не трогаем.
+    if "--selftest" not in sys.argv:
+        try:
+            from core.strategy_data import ensure_default_strategy
+
+            _applied = ensure_default_strategy()
+        except Exception:  # noqa: BLE001 - выбор стратегии не должен мешать запуску
+            log.exception("Не удалось включить стратегию по умолчанию")
+            _applied = ""
+        if _applied:
+            backend.showMessage(
+                f"Стратегия не выбрана — включена стратегия по умолчанию: {_applied}",
+                "info",
+            )
+            backend.reloadStrategy()
+
     engine = QQmlApplicationEngine()
     context = engine.rootContext()
     context.setContextProperty("Theme", theme)

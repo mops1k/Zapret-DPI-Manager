@@ -66,13 +66,15 @@ if [ -z "$DETECTED_USER" ] || [ -z "$CURRENT_HOME" ]; then
     exit 1
 fi
 
-# Проверяем наличие конфигурационного файла
+# Проверяем наличие конфигурационного файла. Его отсутствие — это «стратегия не
+# выбрана», а не повод не запускать службу: ниже применяется стратегия по
+# умолчанию (поэтому служба поднимается и на свежей установке).
 CONFIG_FILE="$CURRENT_HOME/Zapret_DPI_Manager/config.txt"
+DEFAULT_STRATEGY_NAME="General"
+DEFAULT_STRATEGY_FILE="$CURRENT_HOME/Zapret_DPI_Manager/files/strategy/$DEFAULT_STRATEGY_NAME"
 if [ ! -f "$CONFIG_FILE" ]; then
-    echo "Error: Config file not found at $CONFIG_FILE"
-    echo "Please ensure Zapret DPI Manager is properly installed"
-    echo "You can run the installer again or check the installation"
-    exit 1
+    echo "Warning: файл настроек не найден: $CONFIG_FILE"
+    echo "Warning: будет применена стратегия по умолчанию: $DEFAULT_STRATEGY_NAME"
 fi
 
 echo "Using Zapret DPI Manager installation for user: $DETECTED_USER"
@@ -282,92 +284,125 @@ expand_warp_rule() {
 }
 
 ARGS=""
-CONFIG_FILE="$CURRENT_HOME/Zapret_DPI_Manager/config.txt"
 echo "Reading config from $CONFIG_FILE"
 
-if [ ! -f "$CONFIG_FILE" ]; then
-    echo "Error: Config file not found at $CONFIG_FILE"
-    exit 1
+# Сборка аргументов nfqws из файла правил (config.txt или стратегия по
+# умолчанию). Файл — единственный источник правил, поэтому стратегия по
+# умолчанию проходит тот же конвейер, что и выбранная пользователем.
+# >>> starter collect_args
+collect_args() {
+    local rules_file="$1"
+    local line
+    ARGS=""
+    [ -f "$rules_file" ] || return 0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        # ЗАМЕНЯЕМ ПУТИ НА ВРЕМЕННЫЕ
+        line="${line//\{list_general\}/$TEMP_DIR/list-general_merged.txt}"
+        line="${line//\{list_exclude\}/$TEMP_DIR/list-exclude_merged.txt}"
+        line="${line//\{ipset_exclude\}/$TEMP_DIR/ipset-exclude_merged.txt}"
+        line="${line//\{list_google\}/$TEMP_DIR/list-google.txt}"
+        line="${line//\{ipset_all\}/$TEMP_DIR/ipset-all_merged.txt}"
+        line="${line//\{ipset_all_user\}/$TEMP_DIR/ipset-all_merged.txt}"
+        line="${line//\{ipset_exclude_user\}/$TEMP_DIR/ipset-exclude_merged.txt}"
+        line="${line//\{list_telegram\}/$TEMP_DIR/list-telegram_merged.txt}"
+        line="${line//\{list_telegram_user\}/$TEMP_DIR/list-telegram_merged.txt}"
+        line="${line//\{ipset_telegram\}/$TEMP_DIR/ipset-telegram_merged.txt}"
+        line="${line//\{ipset_telegram_user\}/$TEMP_DIR/ipset-telegram_merged.txt}"
+        line="${line//\{list_general_user\}/$TEMP_DIR/list-general_merged.txt}"
+        line="${line//\{list_exclude_user\}/$TEMP_DIR/list-exclude_merged.txt}"
+        line="${line//\{gw\}/$TEMP_DIR/gw.txt}"
+        line="${line//\{other\}/$TEMP_DIR/other.txt}"
+        line="${line//\{quicgoogle\}/$TEMP_DIR/quic_initial_www_google_com.bin}"
+        line="${line//\{tlsgoogle\}/$TEMP_DIR/tls_clienthello_www_google_com.bin}"
+        line="${line//\{tls4pda\}/$TEMP_DIR/tls_clienthello_4pda_to.bin}"
+        line="${line//\{tlsmax\}/$TEMP_DIR/tls_clienthello_max_ru.bin}"
+        line="${line//\{tlsmaxui\}/$TEMP_DIR/tls_clienthello_max_ru_ui.bin}"
+        line="${line//\{tls5\}/$TEMP_DIR/tls_clienthello_5.bin}"
+        line="${line//\{tls11\}/$TEMP_DIR/tls_clienthello_11.bin}"
+        line="${line//\{quic6\}/$TEMP_DIR/quic_6.bin}"
+        line="${line//\{quic7\}/$TEMP_DIR/quic_7.bin}"
+        line="${line//\{httpfake_ms\}/$TEMP_DIR/http_fake_MS.bin}"
+        line="${line//\{stun\}/$TEMP_DIR/stun.bin}"
+        line="${line//\{stun2\}/$TEMP_DIR/stun2.bin}"
+        line="${line//\{tlssochi\}/$TEMP_DIR/tls_clienthello_sochi_park.bin}"
+        line="${line//\{quic4pda\}/$TEMP_DIR/quic_initial_4pda_to.bin}"
+        line="${line//\{dbankcloud\}/$TEMP_DIR/quic_initial_dbankcloud_ru.bin}"
+        line="${line//\{quic5ka\}/$TEMP_DIR/quic_initial_5ka_ru.bin}"
+        line="${line//\{quicrutube\}/$TEMP_DIR/quic_initial_rutube_ru.bin}"
+        line="${line//\{quicsteam\}/$TEMP_DIR/quic_initial_steamcommunity_com.bin}"
+        line="${line//\{quictencent\}/$TEMP_DIR/quic_initial_tencent_com.bin}"
+        line="${line//\{tls5ka\}/$TEMP_DIR/tls_clienthello_5ka_ru.bin}"
+        line="${line//\{tlssferum\}/$TEMP_DIR/tls_clienthello_www_sferum_ru.bin}"
+
+        # Алиасы наборов конструктора стратегий: у менеджера один общий ipset-файл
+        # (ipset-all_merged) и один общий hostlist (list-general_merged).
+        line="${line//\{ipset_all2\}/$TEMP_DIR/ipset-all_merged.txt}"
+        line="${line//\{ipset_base\}/$TEMP_DIR/ipset-all_merged.txt}"
+        line="${line//\{ipset_cloudflare\}/$TEMP_DIR/ipset-all_merged.txt}"
+        line="${line//\{ipset_cloudflare1\}/$TEMP_DIR/ipset-all_merged.txt}"
+        line="${line//\{ipset_discord\}/$TEMP_DIR/ipset-all_merged.txt}"
+        line="${line//\{ipset_dns\}/$TEMP_DIR/ipset-all_merged.txt}"
+        line="${line//\{cloudflare_ipset\}/$TEMP_DIR/ipset-all_merged.txt}"
+        line="${line//\{discord\}/$TEMP_DIR/list-general_merged.txt}"
+        line="${line//\{telegram\}/$TEMP_DIR/list-telegram_merged.txt}"
+        line="${line//\{youtube\}/$TEMP_DIR/list-general_merged.txt}"
+        line="${line//\{rutracker\}/$TEMP_DIR/list-general_merged.txt}"
+        line="${line//\{hosts\}/$TEMP_DIR/list-general_merged.txt}"
+        line="${line//\{netrogat\}/$TEMP_DIR/list-general_merged.txt}"
+        line="${line//\{other2\}/$TEMP_DIR/list-general_merged.txt}"
+        line="${line//\{russia_blacklist\}/$TEMP_DIR/list-general_merged.txt}"
+        line="${line//\{russia_youtube_rtmps\}/$TEMP_DIR/list-general_merged.txt}"
+
+        # ЗАМЕНЯЕМ {GameFilter} НА ЗНАЧЕНИЕ В ЗАВИСИМОСТИ ОТ ПРОТОКОЛА
+        if [[ "$line" == *"--filter-tcp"* && "$line" == *"{GameFilter}"* ]]; then
+            # Для TCP строк используем TCP значение
+            line="${line//\{GameFilter\}/$GAME_FILTER_TCP_VALUE}"
+        elif [[ "$line" == *"--filter-udp"* && "$line" == *"{GameFilter}"* ]]; then
+            # Для UDP строк используем UDP значение
+            line="${line//\{GameFilter\}/$GAME_FILTER_UDP_VALUE}"
+        fi
+
+        # УДАЛЯЕМ --wf-* ОПЦИИ
+        line="$(echo "$line" | sed -E 's/--wf-(tcp|udp)=[^ ]+//g')"
+
+        # НОРМАЛИЗУЕМ ПРОБЕЛЫ
+        line="$(echo "$line" | sed -E 's/  +/ /g' | sed -E 's/^ //;s/ $//')"
+
+            # ДОБАВЛЯЕМ В ARGS
+            if [ -n "$line" ]; then
+                ARGS+=" $line"
+            fi
+    done < "$rules_file"
+}
+# <<< starter collect_args
+
+collect_args "$CONFIG_FILE"
+
+# Стратегия не выбрана (свежая установка кладёт пустой config.txt): служба не
+# может создать правила NFQUEUE и падала с «правила NFQUEUE не созданы».
+# Вместо отказа применяем поставляемую стратегию по умолчанию — служба
+# запускается и работает, а в журнале прямо сказано, чьи это правила.
+# Откуда взяты правила — попадает в диагностику, если правила NFQUEUE не создались.
+ARGS_SOURCE="config.txt ($CONFIG_FILE)"
+
+if [ -z "${ARGS//[[:space:]]/}" ]; then
+    echo "Warning: стратегия не выбрана (config.txt пуст или отсутствует)."
+    if [ ! -f "$DEFAULT_STRATEGY_FILE" ]; then
+        echo "ERROR: стратегия не выбрана, а файл стратегии по умолчанию не найден: $DEFAULT_STRATEGY_FILE" >&2
+        echo "ERROR: выберите стратегию в Zapret DPI Manager и запустите службу снова." >&2
+        exit 1
+    fi
+    echo "Warning: применяю стратегию по умолчанию: $DEFAULT_STRATEGY_NAME ($DEFAULT_STRATEGY_FILE)"
+    echo "Warning: выберите стратегию в Zapret DPI Manager, чтобы заменить её."
+    collect_args "$DEFAULT_STRATEGY_FILE"
+    ARGS_SOURCE="стратегия по умолчанию $DEFAULT_STRATEGY_NAME ($DEFAULT_STRATEGY_FILE)"
+    if [ -z "${ARGS//[[:space:]]/}" ]; then
+        echo "ERROR: файл стратегии по умолчанию пуст: $DEFAULT_STRATEGY_FILE" >&2
+        exit 1
+    fi
+else
+    echo "Config: правила взяты из $CONFIG_FILE"
 fi
-
-while IFS= read -r line || [[ -n "$line" ]]; do
-    # ЗАМЕНЯЕМ ПУТИ НА ВРЕМЕННЫЕ
-    line="${line//\{list_general\}/$TEMP_DIR/list-general_merged.txt}"
-    line="${line//\{list_exclude\}/$TEMP_DIR/list-exclude_merged.txt}"
-    line="${line//\{ipset_exclude\}/$TEMP_DIR/ipset-exclude_merged.txt}"
-    line="${line//\{list_google\}/$TEMP_DIR/list-google.txt}"
-    line="${line//\{ipset_all\}/$TEMP_DIR/ipset-all_merged.txt}"
-    line="${line//\{ipset_all_user\}/$TEMP_DIR/ipset-all_merged.txt}"
-    line="${line//\{ipset_exclude_user\}/$TEMP_DIR/ipset-exclude_merged.txt}"
-    line="${line//\{list_telegram\}/$TEMP_DIR/list-telegram_merged.txt}"
-    line="${line//\{list_telegram_user\}/$TEMP_DIR/list-telegram_merged.txt}"
-    line="${line//\{ipset_telegram\}/$TEMP_DIR/ipset-telegram_merged.txt}"
-    line="${line//\{ipset_telegram_user\}/$TEMP_DIR/ipset-telegram_merged.txt}"
-    line="${line//\{list_general_user\}/$TEMP_DIR/list-general_merged.txt}"
-    line="${line//\{list_exclude_user\}/$TEMP_DIR/list-exclude_merged.txt}"
-    line="${line//\{gw\}/$TEMP_DIR/gw.txt}"
-    line="${line//\{other\}/$TEMP_DIR/other.txt}"
-    line="${line//\{quicgoogle\}/$TEMP_DIR/quic_initial_www_google_com.bin}"
-    line="${line//\{tlsgoogle\}/$TEMP_DIR/tls_clienthello_www_google_com.bin}"
-    line="${line//\{tls4pda\}/$TEMP_DIR/tls_clienthello_4pda_to.bin}"
-    line="${line//\{tlsmax\}/$TEMP_DIR/tls_clienthello_max_ru.bin}"
-    line="${line//\{tlsmaxui\}/$TEMP_DIR/tls_clienthello_max_ru_ui.bin}"
-    line="${line//\{tls5\}/$TEMP_DIR/tls_clienthello_5.bin}"
-    line="${line//\{tls11\}/$TEMP_DIR/tls_clienthello_11.bin}"
-    line="${line//\{quic6\}/$TEMP_DIR/quic_6.bin}"
-    line="${line//\{quic7\}/$TEMP_DIR/quic_7.bin}"
-    line="${line//\{httpfake_ms\}/$TEMP_DIR/http_fake_MS.bin}"
-    line="${line//\{stun\}/$TEMP_DIR/stun.bin}"
-    line="${line//\{stun2\}/$TEMP_DIR/stun2.bin}"
-    line="${line//\{tlssochi\}/$TEMP_DIR/tls_clienthello_sochi_park.bin}"
-    line="${line//\{quic4pda\}/$TEMP_DIR/quic_initial_4pda_to.bin}"
-    line="${line//\{dbankcloud\}/$TEMP_DIR/quic_initial_dbankcloud_ru.bin}"
-    line="${line//\{quic5ka\}/$TEMP_DIR/quic_initial_5ka_ru.bin}"
-    line="${line//\{quicrutube\}/$TEMP_DIR/quic_initial_rutube_ru.bin}"
-    line="${line//\{quicsteam\}/$TEMP_DIR/quic_initial_steamcommunity_com.bin}"
-    line="${line//\{quictencent\}/$TEMP_DIR/quic_initial_tencent_com.bin}"
-    line="${line//\{tls5ka\}/$TEMP_DIR/tls_clienthello_5ka_ru.bin}"
-    line="${line//\{tlssferum\}/$TEMP_DIR/tls_clienthello_www_sferum_ru.bin}"
-
-    # Алиасы наборов конструктора стратегий: у менеджера один общий ipset-файл
-    # (ipset-all_merged) и один общий hostlist (list-general_merged).
-    line="${line//\{ipset_all2\}/$TEMP_DIR/ipset-all_merged.txt}"
-    line="${line//\{ipset_base\}/$TEMP_DIR/ipset-all_merged.txt}"
-    line="${line//\{ipset_cloudflare\}/$TEMP_DIR/ipset-all_merged.txt}"
-    line="${line//\{ipset_cloudflare1\}/$TEMP_DIR/ipset-all_merged.txt}"
-    line="${line//\{ipset_discord\}/$TEMP_DIR/ipset-all_merged.txt}"
-    line="${line//\{ipset_dns\}/$TEMP_DIR/ipset-all_merged.txt}"
-    line="${line//\{cloudflare_ipset\}/$TEMP_DIR/ipset-all_merged.txt}"
-    line="${line//\{discord\}/$TEMP_DIR/list-general_merged.txt}"
-    line="${line//\{telegram\}/$TEMP_DIR/list-telegram_merged.txt}"
-    line="${line//\{youtube\}/$TEMP_DIR/list-general_merged.txt}"
-    line="${line//\{rutracker\}/$TEMP_DIR/list-general_merged.txt}"
-    line="${line//\{hosts\}/$TEMP_DIR/list-general_merged.txt}"
-    line="${line//\{netrogat\}/$TEMP_DIR/list-general_merged.txt}"
-    line="${line//\{other2\}/$TEMP_DIR/list-general_merged.txt}"
-    line="${line//\{russia_blacklist\}/$TEMP_DIR/list-general_merged.txt}"
-    line="${line//\{russia_youtube_rtmps\}/$TEMP_DIR/list-general_merged.txt}"
-
-    # ЗАМЕНЯЕМ {GameFilter} НА ЗНАЧЕНИЕ В ЗАВИСИМОСТИ ОТ ПРОТОКОЛА
-    if [[ "$line" == *"--filter-tcp"* && "$line" == *"{GameFilter}"* ]]; then
-        # Для TCP строк используем TCP значение
-        line="${line//\{GameFilter\}/$GAME_FILTER_TCP_VALUE}"
-    elif [[ "$line" == *"--filter-udp"* && "$line" == *"{GameFilter}"* ]]; then
-        # Для UDP строк используем UDP значение
-        line="${line//\{GameFilter\}/$GAME_FILTER_UDP_VALUE}"
-    fi
-
-    # УДАЛЯЕМ --wf-* ОПЦИИ
-    line="$(echo "$line" | sed -E 's/--wf-(tcp|udp)=[^ ]+//g')"
-
-    # НОРМАЛИЗУЕМ ПРОБЕЛЫ
-    line="$(echo "$line" | sed -E 's/  +/ /g' | sed -E 's/^ //;s/ $//')"
-
-    # ДОБАВЛЯЕМ В ARGS
-    if [ -n "$line" ]; then
-        ARGS+=" $line"
-    fi
-done < "$CONFIG_FILE"
 
 # Профили WARP для внешнего трафика туннеля: nfqws применяет первый совпавший
 # профиль, поэтому они идут ПЕРЕД правилами пользователя.
@@ -410,6 +445,39 @@ elif [ "$FWTYPE" = "nftables" ]; then
     UDP_PORTS=$(echo "$ARGS" | tr -s ' ' '\n' | grep '^--filter-udp=' | sed 's/--filter-udp=//' | paste -sd, | sed 's/:/-/g' || true)
 fi
 
+# `--filter-tcp=*` / `--filter-udp=*` (варианты конструктора стратегий) означают
+# «все порты»: NFQUEUE-правило создаётся без ограничения порта. Раньше `*`
+# попадал в set портов nftables и ронял службу на синтаксисе.
+TCP_ALL_PORTS=0
+UDP_ALL_PORTS=0
+split_all_ports() {
+    # $1 — строка портов; результат: PORTS_WITHOUT_ALL и PORTS_ALL (0/1).
+    local ports="$1"
+    local item
+    local -a kept=()
+    PORTS_WITHOUT_ALL=""
+    PORTS_ALL=0
+    while IFS= read -r item; do
+        item="${item// /}"
+        [ -n "$item" ] || continue
+        if [ "$item" = "*" ]; then
+            PORTS_ALL=1
+            continue
+        fi
+        kept+=("$item")
+    done < <(printf '%s\n' "$ports" | tr ',' '\n')
+    if [ "${#kept[@]}" -gt 0 ]; then
+        PORTS_WITHOUT_ALL="$(printf '%s\n' "${kept[@]}" | paste -sd, -)"
+    fi
+}
+
+split_all_ports "$TCP_PORTS"
+TCP_PORTS="$PORTS_WITHOUT_ALL"
+TCP_ALL_PORTS="$PORTS_ALL"
+split_all_ports "$UDP_PORTS"
+UDP_PORTS="$PORTS_WITHOUT_ALL"
+UDP_ALL_PORTS="$PORTS_ALL"
+
 # Удаляем дубликаты портов
 TCP_PORTS=$(echo "$TCP_PORTS" | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
 UDP_PORTS=$(echo "$UDP_PORTS" | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
@@ -423,8 +491,17 @@ elif [ "$FWTYPE" = "nftables" ]; then
     UDP_PORTS=$(echo "$UDP_PORTS" | sed 's/:/-/g')
 fi
 
-echo "Configuring $FWTYPE for TCP ports: $TCP_PORTS"
-echo "Configuring $FWTYPE for UDP ports: $UDP_PORTS"
+TCP_PORTS_LABEL="${TCP_PORTS:-нет}"
+UDP_PORTS_LABEL="${UDP_PORTS:-нет}"
+if [ "$TCP_ALL_PORTS" = "1" ]; then
+    TCP_PORTS_LABEL="* (все порты)"
+fi
+if [ "$UDP_ALL_PORTS" = "1" ]; then
+    UDP_PORTS_LABEL="* (все порты)"
+fi
+
+echo "Configuring $FWTYPE for TCP ports: $TCP_PORTS_LABEL"
+echo "Configuring $FWTYPE for UDP ports: $UDP_PORTS_LABEL"
 
 if [ "$FWTYPE" = "iptables" ]; then
     # Своя цепочка ZAPRET: не стираем чужие правила Docker/libvirt/VPN/firewalld.
@@ -469,28 +546,35 @@ if [ "$FWTYPE" = "iptables" ]; then
         local extra_flags=$4
         local out_flags=$5
         local in_flags=$6
+        # Пустой ports — «все порты» (--filter-*=*): без multiport.
+        local dport_match=""
+        local sport_match=""
+        if [ -n "$ports" ]; then
+            dport_match="-m multiport --dports $ports"
+            sport_match="-m multiport --sports $ports"
+        fi
 
-        iptables -t mangle -I ZAPRET -p "$proto" -m multiport --dports "$ports" \
+        iptables -t mangle -I ZAPRET -p "$proto" $dport_match \
             $out_flags $extra_flags -j NFQUEUE --queue-num "$qnum" --queue-bypass
-        iptables -t mangle -I ZAPRET -p "$proto" -m multiport --sports "$ports" \
+        iptables -t mangle -I ZAPRET -p "$proto" $sport_match \
             $in_flags $extra_flags -j NFQUEUE --queue-num "$qnum" --queue-bypass
-        ip6tables -t mangle -I ZAPRET -p "$proto" -m multiport --dports "$ports" \
+        ip6tables -t mangle -I ZAPRET -p "$proto" $dport_match \
             $out_flags $extra_flags -j NFQUEUE --queue-num "$qnum" --queue-bypass
-        ip6tables -t mangle -I ZAPRET -p "$proto" -m multiport --sports "$ports" \
+        ip6tables -t mangle -I ZAPRET -p "$proto" $sport_match \
             $in_flags $extra_flags -j NFQUEUE --queue-num "$qnum" --queue-bypass
     }
 
-    if [ -n "$TCP_PORTS" ]; then
+    if [ -n "$TCP_PORTS" ] || [ "$TCP_ALL_PORTS" = "1" ]; then
         add_ipt_rule "tcp" "$TCP_PORTS" "200" "-m connbytes --connbytes-dir=original --connbytes-mode=packets --connbytes 1:12" "$WARP_OUT_FLAGS" "$WARP_IN_FLAGS"
     fi
-    if [ -n "$UDP_PORTS" ]; then
+    if [ -n "$UDP_PORTS" ] || [ "$UDP_ALL_PORTS" = "1" ]; then
         add_ipt_rule "udp" "$UDP_PORTS" "200" "-m connbytes --connbytes-dir=original --connbytes-mode=packets --connbytes 1:12" "$WARP_OUT_FLAGS" "$WARP_IN_FLAGS"
     fi
 
-    if [ -n "$TCP_PORTS" ]; then
+    if [ -n "$TCP_PORTS" ] || [ "$TCP_ALL_PORTS" = "1" ]; then
         add_ipt_rule "tcp" "$TCP_PORTS" "200" "-m connbytes --connbytes-dir=reply --connbytes-mode=packets --connbytes 1:6" "$WARP_OUT_FLAGS" "$WARP_IN_FLAGS"
     fi
-    if [ -n "$UDP_PORTS" ]; then
+    if [ -n "$UDP_PORTS" ] || [ "$UDP_ALL_PORTS" = "1" ]; then
         add_ipt_rule "udp" "$UDP_PORTS" "200" "-m connbytes --connbytes-dir=reply --connbytes-mode=packets --connbytes 1:6" "$WARP_OUT_FLAGS" "$WARP_IN_FLAGS"
     fi
 
@@ -530,12 +614,18 @@ elif [ "$FWTYPE" = "nftables" ]; then
         echo "WARP: endpoint'ы туннеля исключены из NFQUEUE (v4: ${WARP_EP_V4:-нет}, v6: ${WARP_EP_V6:-нет})"
     fi
 
-    if [ -n "$TCP_PORTS" ]; then
+    if [ "$TCP_ALL_PORTS" = "1" ]; then
+        nft add rule inet zapret postrouting tcp $WARP_IFACE_NFT_OUT ct original packets 1-12 queue num 200 bypass
+        nft add rule inet zapret prerouting tcp $WARP_IFACE_NFT_IN ct reply packets 1-6 queue num 200 bypass
+    elif [ -n "$TCP_PORTS" ]; then
         nft add rule inet zapret postrouting tcp dport { $TCP_PORTS } $WARP_IFACE_NFT_OUT ct original packets 1-12 queue num 200 bypass
         nft add rule inet zapret prerouting tcp sport { $TCP_PORTS } $WARP_IFACE_NFT_IN ct reply packets 1-6 queue num 200 bypass
     fi
 
-    if [ -n "$UDP_PORTS" ]; then
+    if [ "$UDP_ALL_PORTS" = "1" ]; then
+        nft add rule inet zapret postrouting udp $WARP_IFACE_NFT_OUT ct original packets 1-12 queue num 200 bypass
+        nft add rule inet zapret prerouting udp $WARP_IFACE_NFT_IN ct reply packets 1-6 queue num 200 bypass
+    elif [ -n "$UDP_PORTS" ]; then
         nft add rule inet zapret postrouting udp dport { $UDP_PORTS } $WARP_IFACE_NFT_OUT ct original packets 1-12 queue num 200 bypass
         nft add rule inet zapret prerouting udp sport { $UDP_PORTS } $WARP_IFACE_NFT_IN ct reply packets 1-6 queue num 200 bypass
     fi
@@ -545,12 +635,15 @@ fi
 if [ "$FWTYPE" = "iptables" ]; then
     if ! iptables -t mangle -S ZAPRET 2>/dev/null | grep -q -- '-j NFQUEUE'; then
         echo "ERROR: правила NFQUEUE не созданы (iptables)" >&2
+        echo "ERROR: порты TCP: $TCP_PORTS_LABEL, UDP: $UDP_PORTS_LABEL; стратегия: ${ARGS_SOURCE:-config.txt}" >&2
         exit 1
     fi
 elif [ "$FWTYPE" = "nftables" ]; then
     # nft печатает правило как «queue flags bypass to 200», а не «queue num 200».
     if ! nft list chain inet zapret prerouting 2>/dev/null | grep -qE 'queue.*to 200'; then
         echo "ERROR: правила NFQUEUE не созданы (nftables)" >&2
+        echo "ERROR: порты TCP: $TCP_PORTS_LABEL, UDP: $UDP_PORTS_LABEL; стратегия: ${ARGS_SOURCE:-config.txt}" >&2
+        echo "ERROR: проверьте, что nftables установлен и модуль nf_conntrack загружен (nft list table inet zapret)." >&2
         exit 1
     fi
 fi
