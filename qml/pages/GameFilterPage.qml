@@ -104,7 +104,13 @@ Item {
                     id: toggleButton
                     text: page.state.enabled ? "Выключить" : "Включить"
                     variant: "filled"
-                    onClicked: Backend.setGameFilter(!page.state.enabled, page.mode)
+                    onClicked: {
+                        if (page.state.enabled) {
+                            Backend.setGameFilter(false, page.mode)
+                        } else {
+                            warningDialog.open()
+                        }
+                    }
                     KeyNavigation.down: modeBoth
                 }
 
@@ -222,7 +228,7 @@ Item {
 
                 Text {
                     Layout.fillWidth: true
-                    text: page.state.activePreset.length > 0
+                    text: (page.state.activePreset || "").length > 0
                         ? "Активен: " + page.state.activePreset
                         : "Пресет не выбран"
                     color: Theme.colors.on_surface_variant
@@ -242,6 +248,93 @@ Item {
         }
 
         Item { Layout.fillHeight: true }
+    }
+
+    //: Предупреждение перед включением GameFilter (тексты Tk-версии).
+    Dialog {
+        id: warningDialog
+        objectName: "gameFilterWarning"
+
+        anchors.centerIn: parent
+        width: Math.min(page.width - Theme.spaces.xxl * 2, 620)
+        modal: true
+
+        background: Rectangle {
+            color: Theme.colors.surface_container
+            radius: Theme.radii.lg
+            border.width: 1
+            border.color: Theme.colors.outline_variant
+        }
+
+        contentItem: ColumnLayout {
+            spacing: Theme.spaces.sm
+
+            Text {
+                Layout.fillWidth: true
+                text: "ВНИМАНИЕ!"
+                color: Theme.colors.warning
+                font.pixelSize: Theme.typeSize("title_medium")
+                font.weight: Font.Medium
+            }
+
+            Text {
+                Layout.fillWidth: true
+                text: "Данный фильтр является экспериментальной функцией"
+                color: Theme.colors.on_surface
+                font.pixelSize: Theme.typeSize("body_medium")
+                wrapMode: Text.WordWrap
+            }
+
+            Text {
+                Layout.fillWidth: true
+                text: "Возможные проблемы на Steam Deck:"
+                color: Theme.colors.error
+                font.pixelSize: Theme.typeSize("body_small")
+            }
+
+            Text {
+                Layout.fillWidth: true
+                text: "• черный экран после перехода с рабочего стола в игровой режим. "
+                        + "Лучше перезагрузиться\n"
+                    + "• долгая загрузка после включения/перезагрузки\n"
+                    + "• скорее всего не будет работать Youtube и Discord. "
+                        + "Нужно будет отключать GameFilter\n"
+                    + "• возможны другие нестабильности в работе"
+                color: Theme.colors.on_surface_variant
+                font.pixelSize: Theme.typeSize("body_small")
+                wrapMode: Text.WordWrap
+            }
+
+            Text {
+                Layout.fillWidth: true
+                text: "Пользоваться данной функцией на свой страх и риск"
+                color: Theme.colors.warning
+                font.pixelSize: Theme.typeSize("label_large")
+                wrapMode: Text.WordWrap
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Theme.spaces.sm
+
+                Item { Layout.fillWidth: true }
+
+                MButton {
+                    text: "Назад"
+                    variant: "text"
+                    onClicked: warningDialog.close()
+                }
+
+                MButton {
+                    text: "Включить"
+                    variant: "filled"
+                    onClicked: {
+                        warningDialog.close()
+                        Backend.setGameFilter(true, page.mode)
+                    }
+                }
+            }
+        }
     }
 
     Connections {

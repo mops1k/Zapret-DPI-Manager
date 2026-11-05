@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import re
 import threading
+import time
 import webbrowser
 from pathlib import Path
 
@@ -1625,6 +1626,18 @@ class Backend(QObject):
     updateAvailableChanged = Signal()
     _testerLineReady = Signal(str)
     _testerFinished = Signal("QVariantMap")
+    uninstallChanged = Signal()
+    uninstallLogChanged = Signal()
+    _uninstallLineReady = Signal(str)
+    _uninstallFinished = Signal(bool, str)
+    systemCheckChanged = Signal()
+    systemCheckLogChanged = Signal()
+    _syscheckLineReady = Signal(str)
+    _syscheckChecked = Signal("QVariantMap", bool)
+    _syscheckRepaired = Signal("QVariantMap", bool)
+
+    #: Предел журнала удаления: старые строки отбрасываются.
+    UNINSTALL_LOG_LIMIT = 400
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -1683,6 +1696,17 @@ class Backend(QObject):
         self._hostlist_busy = False
         self._message = ""
         self._message_kind = "info"
+        self._uninstall_running = False
+        self._uninstall_log: list[dict] = []
+        self._uninstall_done = False
+        self._uninstall_ok = False
+        self._uninstall_message = ""
+        self._syscheck: dict = {"checked": False, "ok": True, "problems": [],
+                                "message": ""}
+        self._syscheck_log: list[dict] = []
+        self._syscheck_running = False
+        self._syscheck_repairing = False
+        self._syscheck_attention = False
         self._threads: list[threading.Thread] = []
 
         self._statusReady.connect(self._apply_status)
@@ -1724,6 +1748,11 @@ class Backend(QObject):
         self._checkFinished.connect(self._apply_check_finished)
         self._testerLineReady.connect(self._apply_tester_line)
         self._testerFinished.connect(self._apply_tester_finished)
+        self._uninstallLineReady.connect(self._apply_uninstall_line)
+        self._uninstallFinished.connect(self._apply_uninstall_finished)
+        self._syscheckLineReady.connect(self._apply_syscheck_line)
+        self._syscheckChecked.connect(self._apply_system_checked)
+        self._syscheckRepaired.connect(self._apply_system_repaired)
 
         self._timer = QTimer(self)
         self._timer.setInterval(4000)
@@ -2370,6 +2399,26 @@ class Backend(QObject):
     @Property(str, notify=updateAvailableChanged)
     def updateNotes(self) -> str:
         return self._update_notes
+
+    @Property(bool, notify=uninstallChanged)
+    def uninstallRunning(self) -> bool:
+        return self._uninstall_running
+
+    @Property(bool, notify=uninstallChanged)
+    def uninstallDone(self) -> bool:
+        return self._uninstall_done
+
+    @Property(bool, notify=uninstallChanged)
+    def uninstallSucceeded(self) -> bool:
+        return self._uninstall_ok
+
+    @Property(str, notify=uninstallChanged)
+    def uninstallMessage(self) -> str:
+        return self._uninstall_message
+
+    @Property("QVariantList", notify=uninstallLogChanged)
+    def uninstallLog(self) -> list[dict]:
+        return self._uninstall_log
 
     @Property("QVariantMap", notify=unlockChanged)
     def unlockState(self) -> dict:
@@ -3146,6 +3195,305 @@ class Backend(QObject):
             self._set_message("Сохранённый пароль sudo удалён", "success")
         else:
             self._set_message("Сохранённого пароля sudo нет", "info")
+
+    # -- Удаление Zapret ----------------------------------------------------
+
+    @Slot()
+    def startUninstall(self) -> None:
+        """Удаление Zapret: подтверждение спрашивает экран, здесь — сама работа.
+
+        Диалоги ядра (``core/dialog_port``) в Qt-версии не регистрируются,
+        поэтому подтверждение, прогресс и журнал отдаются экрану QML.
+        """
+        if self._uninstall_running:
+            return
+        self._uninstall_running = True
+        self._uninstall_done = False
+        self._uninstall_ok = False
+        self._uninstall_message = ""
+        self._uninstall_log = []
+        self.uninstallChanged.emit()
+        self.uninstallLogChanged.emit()
+        self._spawn(self._uninstall_worker)
+
+    def _uninstall_worker(self) -> None:
+        last_info = {"text": ""}
+
+        def log(text: str) -> None:
+            self._uninstallLineReady.emit(str(text))
+
+        def progress(text: str, percent: float | None = None) -> None:
+            suffix = "" if percent is None else f" · {int(round(float(percent)))}%"
+            self._uninstallLineReady.emit(f"{text}{suffix}")
+
+        def info(title: str, message: str) -> None:
+            last_info["text"] = f"{title}: {message}"
+            self._uninstallLineReady.emit(last_info["text"])
+
+        ok, message = False, ""
+        try:
+            from core.zapret_uninstaller import ZapretUninstaller
+
+            uninstaller = ZapretUninstaller(
+                None,
+                show_info_fn=info,
+                # Подтверждение уже дано на экране удаления.
+                ask_yesno_fn=lambda _title, _message: True,
+                progress_fn=progress,
+                log_fn=log,
+                quit_on_success=False,
+            )
+            result = uninstaller.run_uninstall()
+            if result == "close_app":
+                ok, message = True, "Zapret удалён с системы"
+            elif bool(result):
+                ok, message = False, "Zapret не установлен — удалять нечего"
+            else:
+                # Причину (нет sudo, отказ, ошибка) ядро сообщает через show_info.
+                ok = False
+                message = last_info["text"] or "Удаление отменено или завершилось ошибкой"
+        except Exception as exc:  # noqa: BLE001
+            self._log.exception("Ошибка удаления Zapret")
+            ok, message = False, f"Ошибка удаления Zapret: {exc}"
+        self._uninstallFinished.emit(bool(ok), str(message))
+
+    def _apply_uninstall_line(self, text: str) -> None:
+        line = str(text or "").strip()
+        if not line:
+            return
+        self._uninstall_log = (self._uninstall_log + [{"text": line}])[
+            -self.UNINSTALL_LOG_LIMIT:]
+        self.uninstallLogChanged.emit()
+
+    def _apply_uninstall_finished(self, ok: bool, message: str) -> None:
+        self._uninstall_running = False
+        self._uninstall_done = True
+        self._uninstall_ok = bool(ok)
+        self._uninstall_message = str(message or "")
+        self._apply_uninstall_line(f"Итог: {self._uninstall_message}")
+        if ok:
+            # Службы и каталога менеджера больше нет — опрос статуса не нужен.
+            self._timer.stop()
+        self.uninstallChanged.emit()
+        self._set_message(self._uninstall_message, "success" if ok else "warning")
+
+    # -- Проверка системы: зависимости, zapret, целостность файлов -----------
+
+    @Property("QVariantMap", notify=systemCheckChanged)
+    def systemCheckState(self) -> dict:
+        return self._syscheck
+
+    @Property(bool, notify=systemCheckChanged)
+    def systemCheckRunning(self) -> bool:
+        return self._syscheck_running
+
+    @Property(bool, notify=systemCheckChanged)
+    def systemCheckRepairing(self) -> bool:
+        return self._syscheck_repairing
+
+    @Property(bool, notify=systemCheckChanged)
+    def systemCheckNeedsAttention(self) -> bool:
+        return self._syscheck_attention
+
+    @Property("QVariantList", notify=systemCheckLogChanged)
+    def systemCheckLog(self) -> list[dict]:
+        return self._syscheck_log
+
+    @Slot(bool)
+    def checkSystem(self, notify: bool = False) -> None:
+        """Проверка системы только на чтение (без sudo и без изменений)."""
+        if self._syscheck_running or self._syscheck_repairing:
+            return
+        self._syscheck_running = True
+        self._syscheck_log = []
+        self.systemCheckChanged.emit()
+        self.systemCheckLogChanged.emit()
+        self._spawn(self._system_check_worker, bool(notify))
+
+    @Slot()
+    def dismissSystemCheck(self) -> None:
+        """«Позже» в уведомлении о проблемах проверки системы."""
+        if not self._syscheck_attention:
+            return
+        self._syscheck_attention = False
+        self.systemCheckChanged.emit()
+
+    @Slot()
+    def repairSystem(self) -> None:
+        """Исправление найденного: зависимости, установка zapret, файлы менеджера.
+
+        Запускается только по явному действию пользователя: ставит пакеты
+        через sudo (askpass) и при необходимости скачивает архив.
+        """
+        if self._syscheck_running or self._syscheck_repairing:
+            return
+        self._syscheck_repairing = True
+        self._syscheck_attention = False
+        self._syscheck_log = []
+        self.systemCheckChanged.emit()
+        self.systemCheckLogChanged.emit()
+        self._spawn(self._system_repair_worker)
+
+    def _collect_system_problems(self, line) -> dict:
+        """Только чтение: зависимости, установка zapret, целостность файлов."""
+        line("Проверка зависимостей…")
+        missing_deps: list[str] = []
+        try:
+            from core.dependency_checker import DependencyChecker
+
+            deps = DependencyChecker()
+            missing_deps = [name for name in deps.dependencies
+                            if not deps.is_package_installed(name)]
+        except Exception as exc:  # noqa: BLE001
+            self._log.exception("Проверка зависимостей не удалась")
+            line(f"Не удалось проверить зависимости: {exc}")
+        line("Зависимости: " + ("все на месте" if not missing_deps
+                                else "не хватает " + ", ".join(missing_deps)))
+
+        line("Проверка установки Zapret…")
+        installed = False
+        try:
+            from core.zapret_checker import ZapretChecker
+
+            installed = bool(ZapretChecker().is_zapret_installed())
+        except Exception as exc:  # noqa: BLE001
+            self._log.exception("Проверка установки Zapret не удалась")
+            line(f"Не удалось проверить установку Zapret: {exc}")
+        line("Zapret " + ("установлен" if installed else "не установлен"))
+
+        missing_files: list[str] = []
+        missing_dirs: list[str] = []
+        if installed:
+            line("Проверка файлов менеджера…")
+            try:
+                from core.file_checker import ZapretFileChecker
+
+                checker = ZapretFileChecker()
+                missing_files, missing_dirs = checker.check_files()
+            except Exception as exc:  # noqa: BLE001
+                self._log.exception("Проверка файлов менеджера не удалась")
+                line(f"Не удалось проверить файлы: {exc}")
+            line(f"Отсутствуют файлы: {len(missing_files)}, "
+                 f"каталоги: {len(missing_dirs)}")
+
+        problems: list[str] = []
+        if missing_deps:
+            problems.append("Не установлены зависимости: " + ", ".join(missing_deps))
+        if not installed:
+            problems.append("Zapret не установлен: нет /opt/zapret или службы zapret.service")
+        if missing_files or missing_dirs:
+            problems.append("Файлы менеджера повреждены: отсутствуют "
+                            f"файлы ({len(missing_files)}) "
+                            f"и каталоги ({len(missing_dirs)})")
+
+        return {
+            "checked": True,
+            "ok": not problems,
+            "problems": problems,
+            "missingDependencies": missing_deps,
+            "missingFiles": len(missing_files),
+            "missingDirs": len(missing_dirs),
+            "zapretInstalled": installed,
+            "message": ("Проверка пройдена: всё на месте" if not problems
+                        else "Найдены проблемы: " + "; ".join(problems)),
+            "checkedAt": time.strftime("%H:%M:%S"),
+        }
+
+    def _system_check_worker(self, notify: bool) -> None:
+        def line(text: str) -> None:
+            self._syscheckLineReady.emit(str(text))
+
+        try:
+            payload = self._collect_system_problems(line)
+        except Exception as exc:  # noqa: BLE001
+            self._log.exception("Проверка системы не удалась")
+            payload = {"checked": True, "ok": False, "problems": [str(exc)],
+                       "message": f"Проверка не удалась: {exc}",
+                       "checkedAt": time.strftime("%H:%M:%S")}
+        self._syscheckChecked.emit(payload, bool(notify))
+
+    def _system_repair_worker(self) -> None:
+        def line(text: str) -> None:
+            self._syscheckLineReady.emit(str(text))
+
+        def progress(text: str, percent: float | None = None) -> None:
+            suffix = "" if percent is None else f" · {int(round(float(percent)))}%"
+            self._syscheckLineReady.emit(f"{text}{suffix}")
+
+        def info(title: str, message: str) -> None:
+            self._syscheckLineReady.emit(f"{title}: {message}")
+
+        ok = True
+        try:
+            state = self._collect_system_problems(line)
+            missing_deps = list(state.get("missingDependencies") or [])
+
+            if missing_deps:
+                line("Установка зависимостей: " + ", ".join(missing_deps))
+                from core.dependency_checker import DependencyChecker
+
+                checker = DependencyChecker(None, show_info_fn=info,
+                                            progress_fn=progress, log_fn=line)
+                ok = bool(checker.check_and_install_dependencies()) and ok
+
+            if not state.get("zapretInstalled"):
+                line("Установка Zapret…")
+                from core.zapret_checker import ZapretChecker
+
+                checker = ZapretChecker(None, show_info_fn=info,
+                                        progress_fn=progress, log_fn=line)
+                ok = bool(checker.check_and_install_zapret()) and ok
+
+            state = self._collect_system_problems(line)
+            if state.get("missingFiles") or state.get("missingDirs"):
+                line("Восстановление файлов менеджера…")
+                from core.file_checker import ZapretFileChecker
+
+                checker = ZapretFileChecker(None, show_info_fn=info,
+                                            progress_fn=progress, log_fn=line)
+                ok = bool(checker.run_check()) and ok
+                state = self._collect_system_problems(line)
+
+            self._syscheckRepaired.emit(state, bool(ok and state.get("ok")))
+        except Exception as exc:  # noqa: BLE001
+            self._log.exception("Исправление системы не удалось")
+            self._syscheckRepaired.emit(
+                {"checked": True, "ok": False, "problems": [str(exc)],
+                 "message": f"Исправление не удалось: {exc}",
+                 "checkedAt": time.strftime("%H:%M:%S")}, False)
+
+    def _apply_syscheck_line(self, text: str) -> None:
+        line = str(text or "").strip()
+        if not line:
+            return
+        self._syscheck_log = (self._syscheck_log + [{"text": line}])[
+            -self.UNINSTALL_LOG_LIMIT:]
+        self.systemCheckLogChanged.emit()
+
+    def _apply_system_checked(self, payload, notify: bool) -> None:
+        data = dict(payload)
+        self._syscheck_running = False
+        self._syscheck = data
+        self._apply_syscheck_line(data.get("message", ""))
+        if data.get("ok"):
+            self._syscheck_attention = False
+        elif notify:
+            self._syscheck_attention = True
+        self.systemCheckChanged.emit()
+
+    def _apply_system_repaired(self, payload, ok: bool) -> None:
+        data = dict(payload)
+        self._syscheck_repairing = False
+        self._syscheck = data
+        self._syscheck_attention = False
+        message = str(data.get("message") or "")
+        self._apply_syscheck_line(("Исправление завершено. " if ok else "Исправление не помогло. ")
+                                  + message)
+        self.systemCheckChanged.emit()
+        self._set_message(
+            ("Система в порядке" if ok else "Остались проблемы — смотрите журнал проверки"),
+            "success" if ok else "warning")
+        self.refresh()
 
     @Slot()
     def quit(self) -> None:

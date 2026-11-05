@@ -15,7 +15,7 @@ from core.platform_info import (
     dependency_package_name,
     install_command_for_package,
 )
-from core.dialog_port import dialog_port
+from core.dialog_port import CallbackProgress, dialog_port
 from core.sudo_helper import run_sudo, sudo_available
 
 class DependencyChecker:
@@ -25,9 +25,13 @@ class DependencyChecker:
         *,
         show_info_fn: Callable[[str, str], None] | None = None,
         sudo_password_provider: Callable[[], str | None] | None = None,
+        progress_fn: Callable[[str, float | None], None] | None = None,
+        log_fn: Callable[[str], None] | None = None,
     ):
         self.root = root_window
         self._show_info_fn = show_info_fn
+        self._progress_fn = progress_fn
+        self._log_fn = log_fn
         self._sudo_password_provider = sudo_password_provider
         # Зависимости зависят от бэкенда файрвола (единый источник — detect_fwtype).
         fw_package = "nft" if detect_fwtype() == "nftables" else "iptables"
@@ -55,6 +59,11 @@ class DependencyChecker:
         log_msg = f"[{timestamp}] {message}"
         self.debug_log.append(log_msg)
         print(log_msg)
+        if self._log_fn is not None:
+            try:
+                self._log_fn(log_msg)
+            except Exception:  # noqa: BLE001 - журнал не должен ломать проверку
+                pass
 
     def is_package_installed(self, package_name):
         """Проверяет, установлен ли пакет"""
@@ -84,9 +93,17 @@ class DependencyChecker:
             return
         dialog_port().show_info(str(title), str(message))
 
+    @property
+    def progress_available(self) -> bool:
+        """Есть куда показывать прогресс: Tk-окно или callback интерфейса."""
+        return bool(self.root) or self._progress_fn is not None
+
     def create_progress_window(self, title="Прогресс"):
-        """Окно прогресса создаёт порт диалогов (Tk — в ui, Qt — в qmlui)."""
-        self.progress_handle = dialog_port().open_progress(title)
+        """Окно прогресса: callback интерфейса или порт диалогов (Tk)."""
+        if self._progress_fn is not None:
+            self.progress_handle = CallbackProgress(self._progress_fn)
+        else:
+            self.progress_handle = dialog_port().open_progress(title)
         return self.progress_handle
 
     def update_progress(self, task, progress_percent):
@@ -601,7 +618,7 @@ class DependencyChecker:
             return False
 
         # 3. Создаем окно прогресса (ТОЛЬКО ПОСЛЕ ввода пароля)
-        if self.root:
+        if self.progress_available:
             self.progress_window = self.create_progress_window("Установка зависимостей")
             if not self.progress_window:
                 self.log_debug("Не удалось создать окно прогресса")

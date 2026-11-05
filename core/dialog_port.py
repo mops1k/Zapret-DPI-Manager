@@ -9,7 +9,7 @@ Qt-адаптер — в ``qmlui`` (или консольный по умолч�
 """
 from __future__ import annotations
 
-from typing import Optional, Protocol, runtime_checkable
+from typing import Callable, Optional, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -48,6 +48,25 @@ class _NullProgress:
 
     def close(self) -> None:
         pass
+
+
+class CallbackProgress:
+    """Дескриптор прогресса поверх callback'а интерфейса.
+
+    Нужен Qt-экранам: они не регистрируют порт диалогов, а передают в ядро
+    функцию ``progress_fn(text, percent)`` и рисуют прогресс сами.
+    """
+
+    def __init__(self, progress_fn: Callable[[str, Optional[float]], None]):
+        self._progress_fn = progress_fn
+        self._closed = False
+
+    def update(self, text: str, percent: Optional[float] = None) -> None:
+        if not self._closed:
+            self._progress_fn(str(text), percent)
+
+    def close(self) -> None:
+        self._closed = True
 
 
 class ConsoleDialogPort:

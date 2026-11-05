@@ -51,6 +51,7 @@ ApplicationWindow {
             onOpenUnlock: stack.push(unlockComponent)
             onOpenInfo: stack.push(infoComponent)
             onOpenReport: stack.push(reportComponent)
+            onOpenUninstall: stack.push(uninstallComponent)
         }
 
         onCurrentItemChanged: if (currentItem === mainPage && mainPage.leftOnce)
@@ -89,6 +90,14 @@ ApplicationWindow {
                 Text {
                     width: parent.width
                     visible: Backend.updateNotes.length > 0
+                    text: "Список изменений:"
+                    color: Theme.colors.on_surface
+                    font.pixelSize: Theme.typeSize("label_large")
+                }
+
+                Text {
+                    width: parent.width
+                    visible: Backend.updateNotes.length > 0
                     text: Backend.updateNotes
                     color: Theme.colors.on_surface_variant
                     font.pixelSize: Theme.typeSize("body_medium")
@@ -114,6 +123,62 @@ ApplicationWindow {
                         text: "Позже"
                         variant: "text"
                         onClicked: Backend.skipStartupUpdate()
+                    }
+                }
+            }
+        }
+    }
+
+    // Проверка системы: уведомление, если при старте нашлись проблемы.
+    Rectangle {
+        id: systemCheckOverlay
+        objectName: "systemCheckOverlay"
+
+        anchors.fill: parent
+        z: 110
+        color: "#80000000"
+        visible: Backend.systemCheckNeedsAttention
+
+        MouseArea {
+            anchors.fill: parent
+            // Модально: клики мимо карточки не закрывают уведомление.
+        }
+
+        Card {
+            anchors.centerIn: parent
+            width: Math.min(parent.width - Theme.spaces.xxl * 2, 620)
+            title: "Проверка системы"
+            subtitle: "Найдены проблемы — исправить можно только по кнопке"
+
+            Column {
+                width: parent.width
+                spacing: Theme.spaces.md
+
+                Text {
+                    width: parent.width
+                    text: (Backend.systemCheckState.problems || []).join("\n")
+                    color: Theme.colors.on_surface_variant
+                    font.pixelSize: Theme.typeSize("body_medium")
+                    wrapMode: Text.WordWrap
+                }
+
+                Row {
+                    width: parent.width
+                    spacing: Theme.spaces.sm
+                    layoutDirection: Qt.RightToLeft
+
+                    MButton {
+                        text: "Открыть проверку"
+                        onClicked: {
+                            Backend.dismissSystemCheck()
+                            root.openSystemCheckPage()
+                        }
+                    }
+
+                    MButton {
+                        text: "Позже"
+                        variant: "text"
+                        onClicked: Backend.dismissSystemCheck()
                     }
                 }
             }
@@ -208,6 +273,23 @@ ApplicationWindow {
         }
     }
 
+    //: Открыть экран удаления Zapret из Python (отладка, скриншоты).
+    function openUninstallPage() {
+        if (stack.depth === 1) {
+            mainPage.openUninstall()
+        }
+    }
+
+    //: Открыть экран проверки системы из Python и из уведомления. Если открыт
+    //: другой экран (уведомление пришло во время работы), сначала возвращаемся
+    //: на главный, иначе push некуда класть.
+    function openSystemCheckPage() {
+        if (stack.depth > 1) {
+            stack.pop(null)
+        }
+        stack.push(systemCheckComponent)
+    }
+
     Component {
         id: strategyComponent
 
@@ -265,6 +347,7 @@ ApplicationWindow {
 
         InfoPage {
             onBack: stack.pop()
+            onOpenSystemCheck: stack.push(systemCheckComponent)
         }
     }
 
@@ -272,6 +355,22 @@ ApplicationWindow {
         id: reportComponent
 
         ReportPage {
+            onBack: stack.pop()
+        }
+    }
+
+    Component {
+        id: uninstallComponent
+
+        UninstallPage {
+            onBack: stack.pop()
+        }
+    }
+
+    Component {
+        id: systemCheckComponent
+
+        SystemCheckPage {
             onBack: stack.pop()
         }
     }

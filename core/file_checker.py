@@ -10,7 +10,7 @@ from pathlib import Path
 
 from core.app_logging import get_error_logger
 from core.zapret_updater import find_bundle_root, get_bundle_download_url
-from core.dialog_port import dialog_port
+from core.dialog_port import CallbackProgress, dialog_port
 
 # Файлы, которые могут содержать пользовательские данные: при восстановлении
 # существующие версии не перезаписываются.
@@ -31,9 +31,13 @@ class ZapretFileChecker:
         root_window=None,
         *,
         show_info_fn: Callable[[str, str], None] | None = None,
+        progress_fn: Callable[[str, float | None], None] | None = None,
+        log_fn: Callable[[str], None] | None = None,
     ):
         self.root = root_window
         self._show_info_fn = show_info_fn
+        self._progress_fn = progress_fn
+        self._log_fn = log_fn
         self.progress_window = None
         self.progress_handle = None
         self.current_task = ""
@@ -111,6 +115,11 @@ class ZapretFileChecker:
         log_msg = f"[{timestamp}] {message}"
         self.debug_log.append(log_msg)
         print(log_msg)
+        if self._log_fn is not None:
+            try:
+                self._log_fn(log_msg)
+            except Exception:  # noqa: BLE001 - журнал не должен ломать проверку
+                pass
 
     def show_info(self, title, message):
         """Показывает информационное сообщение"""
@@ -119,9 +128,17 @@ class ZapretFileChecker:
             return
         dialog_port().show_info(str(title), str(message))
 
+    @property
+    def progress_available(self) -> bool:
+        """Есть куда показывать прогресс: Tk-окно или callback интерфейса."""
+        return bool(self.root) or self._progress_fn is not None
+
     def create_progress_window(self, title="Прогресс"):
-        """Окно прогресса создаёт порт диалогов (Tk — в ui, Qt — в qmlui)."""
-        self.progress_handle = dialog_port().open_progress(title)
+        """Окно прогресса: callback интерфейса или порт диалогов (Tk)."""
+        if self._progress_fn is not None:
+            self.progress_handle = CallbackProgress(self._progress_fn)
+        else:
+            self.progress_handle = dialog_port().open_progress(title)
         return self.progress_handle
 
     def update_progress(self, task, progress_percent):
@@ -412,7 +429,7 @@ class ZapretFileChecker:
                          f"Будет выполнено автоматическое скачивание и восстановление файлов.")
 
             # 4. Создаем окно прогресса ТОЛЬКО при восстановлении
-            if self.root:
+            if self.progress_available:
                 self.progress_window = self.create_progress_window("Восстановление файлов Zapret")
                 if self.progress_window:
                     self.update_progress("Подготовка к восстановлению...", 0)

@@ -19,6 +19,7 @@ Item {
     signal openUnlock()
     signal openInfo()
     signal openReport()
+    signal openUninstall()
 
     //: Флаг: уходили ли с этого экрана (нужно, чтобы при старте фокус
     //: оставался на кнопке службы, а не прыгал на «Сменить»).
@@ -103,7 +104,7 @@ Item {
             Backend.forgetSudoPassword()
             return
         case "uninstall":
-            Backend.showMessage("Удаление Zapret появится на следующем этапе порта", "warning")
+            page.openUninstall()
             return
         default:
             Backend.showMessage("Раздел «" + key + "» появится на следующем этапе порта", "info")

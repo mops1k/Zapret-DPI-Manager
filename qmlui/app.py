@@ -186,6 +186,15 @@ def run() -> int:
     # Проверка обновления при запуске с уведомлением (в самопроверке не нужна).
     if "--selftest" not in sys.argv:
         QTimer.singleShot(2500, backend.checkStartupUpdate)
+        # Тихая проверка системы (только чтение): при проблемах покажет уведомление.
+        QTimer.singleShot(1200, lambda: backend.checkSystem(True))
+
+    if "--page=syscheck" in sys.argv:
+        from PySide6.QtCore import QMetaObject, Qt
+
+        window = engine.rootObjects()[0]
+        QTimer.singleShot(400, lambda: QMetaObject.invokeMethod(
+            window, "openSystemCheckPage", Qt.AutoConnection))
 
     if "--page=tester" in sys.argv:
         from PySide6.QtCore import QMetaObject, Qt
@@ -256,6 +265,13 @@ def run() -> int:
         window = engine.rootObjects()[0]
         QTimer.singleShot(400, lambda: QMetaObject.invokeMethod(
             window, "openHostlistPage", Qt.AutoConnection))
+
+    if "--page=uninstall" in sys.argv:
+        from PySide6.QtCore import QMetaObject, Qt
+
+        window = engine.rootObjects()[0]
+        QTimer.singleShot(400, lambda: QMetaObject.invokeMethod(
+            window, "openUninstallPage", Qt.AutoConnection))
 
     if "--page=warp" in sys.argv:
         from PySide6.QtCore import QMetaObject, Qt
@@ -833,6 +849,66 @@ def _run_selftest(app, engine, backend, theme, log) -> int:
         wait(300)
         checks.append(("уведомление скрыто по «Позже»",
                        overlay is not None and overlay.property("visible") is False))
+
+        # Удаление Zapret: экран открывается, само удаление не запускается
+        # (оно требует подтверждения и sudo). Фокус здесь — на кнопке удаления.
+        _QMetaObject.invokeMethod(window, "openUninstallPage", Qt.AutoConnection)
+        wait(700)
+        checks.append(("экран удаления открыт",
+                       focus_text() == "Удалить Zapret"
+                       and window.property("pageDepth") == 2))
+        stack_item = window.findChild(QObject, "stack")
+        uninstall_page = stack_item.property("currentItem") if stack_item is not None else None
+        checks.append(("удаление не запущено само",
+                       backend.uninstallRunning is False
+                       and uninstall_page is not None
+                       and uninstall_page.property("objectName") == "uninstallPage"))
+        QTest.keyClick(window, Qt.Key_Escape)
+        wait(500)
+        checks.append(("возврат с удаления", window.property("pageDepth") == 1))
+
+        # Проверка системы: экран, настоящая проверка (только чтение) и уведомление.
+        _QMetaObject.invokeMethod(window, "openSystemCheckPage", Qt.AutoConnection)
+        wait(700)
+        checks.append(("экран проверки системы открыт",
+                       focus_text() == "Проверить снова"
+                       and window.property("pageDepth") == 2))
+        checked = False
+        for _ in range(200):
+            wait(50)
+            if not backend.systemCheckRunning and dict(
+                    backend.systemCheckState).get("checked"):
+                checked = True
+                break
+        sys_state = dict(backend.systemCheckState)
+        print(f"  [debug] проверка системы: ok={sys_state.get('ok')} "
+              f"problems={(sys_state.get('problems') or [])[:2]}", flush=True)
+        checks.append(("проверка системы отработала",
+                       checked and bool(sys_state.get("checked"))))
+        checks.append(("итог проверки описан", bool(sys_state.get("message"))))
+        checks.append(("экран не запускает исправление сам",
+                       backend.systemCheckRepairing is False))
+        QTest.keyClick(window, Qt.Key_Escape)
+        wait(500)
+        checks.append(("возврат с проверки системы", window.property("pageDepth") == 1))
+
+        sys_overlay = window.findChild(QObject, "systemCheckOverlay")
+        if sys_state.get("ok") is False:
+            backend._syscheck_attention = True
+            backend.systemCheckChanged.emit()
+            wait(300)
+            checks.append(("уведомление проверки системы показано",
+                           sys_overlay is not None
+                           and sys_overlay.property("visible") is True))
+            backend.dismissSystemCheck()
+            wait(250)
+            checks.append(("уведомление проверки скрыто по «Позже»",
+                           sys_overlay is not None
+                           and sys_overlay.property("visible") is False))
+        else:
+            # Всё в порядке — уведомления нет, проверять нечего.
+            checks.append(("уведомление проверки системы показано", None))
+            checks.append(("уведомление проверки скрыто по «Позже»", None))
 
         failed = [name for name, ok in checks if ok is False]
         for name, ok in checks:

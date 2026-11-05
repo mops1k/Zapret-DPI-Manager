@@ -67,7 +67,7 @@ bash tools/check_installer_steamos.sh               # стенд установ�
 bash tools/check_starter.sh                          # стенд starter.sh: стратегия по умолчанию, --filter-*=*, заглушки nft/nfqws (без root)
 bash -n tools/build_vendor.sh                       # синтаксис сборки prebuilt PySide6 (сеть нужна только при запуске)
 ruff check core qmlui tools main.py                # конфиг в pyproject.toml
-QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software python3 main.py --selftest  # дымовой тест QML-интерфейса (83 проверки)
+QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software python3 main.py --selftest  # дымовой тест QML-интерфейса (93 проверки)
 ```
 
 CI (`.github/workflows/ci.yml`) выполняет те же шаги: ставит PySide6 и прогоняет QML-самопроверку
@@ -89,7 +89,20 @@ CI (`.github/workflows/ci.yml`) выполняет те же шаги: став�
 - `main.py` → QGuiApplication + `qmlui/app.py` (`Backend` из `qmlui/backend.py`) → `core/`
   → `config.txt` → `/opt/zapret/starter.sh` → `nfqws --qnum=200` + правила NFQUEUE.
   Ядро не зависит от GUI: диалоги и прогресс идут через `core/dialog_port.py` (Qt-версия не
-  регистрирует порт — QML-экраны сообщают о результатах сами).
+  регистрирует порт — QML-экраны сообщают о результатах сами). Удаление Zapret — исключение
+  по форме: `core/zapret_uninstaller.py` принимает колбэки `progress_fn`/`log_fn`/`show_info_fn`
+  и `quit_on_success=False`, а экран `qml/pages/UninstallPage.qml` через `Backend.startUninstall()`
+  показывает прогресс и журнал сам и закрывает программу после успеха (`Backend.quit()`).
+  Так же устроены проверки системы: `core/dependency_checker.py`, `core/zapret_checker.py`,
+  `core/file_checker.py` принимают те же колбэки и `progress_available` вместо Tk-`root`.
+- Проверка системы вместо стартовых проверок Tk-версии: `Backend.checkSystem(notify)` только
+  читает (`DependencyChecker.is_package_installed`, `ZapretChecker.is_zapret_installed`,
+  `ZapretFileChecker.check_files`), экран `qml/pages/SystemCheckPage.qml` открывается с
+  `qml/pages/InfoPage.qml`; при проблемах после старта показывается уведомление
+  `systemCheckOverlay`. Ничего не устанавливается само: `Backend.repairSystem()` (кнопка
+  «Исправить») ставит зависимости, файлы и zapret через sudo-askpass.
+- GameFilter включается только после предупреждения `warningDialog` в
+  `qml/pages/GameFilterPage.qml` (тексты Tk-версии про Steam Deck); выключение — сразу.
 - Служба: `/etc/systemd/system/zapret.service`, `Type=oneshot`, `RemainAfterExit=yes`,
   `ExecStart=/bin/bash /opt/zapret/starter.sh`, `ExecStop=/bin/bash /opt/zapret/stopper.sh`.
 - Стратегия по умолчанию `General`: `starter.sh` собирает правила функцией `collect_args`

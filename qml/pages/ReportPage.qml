@@ -73,7 +73,9 @@ Item {
                 onClicked: page.back()
                 ToolTip.visible: hovered
                 ToolTip.text: "Назад"
-                KeyNavigation.down: reportList
+                //: Список отчётов — динамические делегаты Repeater, id делегата
+                //: на уровне страницы не виден: стрелку вниз обрабатывает
+                //: пространственная навигация Qt.
             }
 
             ColumnLayout {

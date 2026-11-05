@@ -8,6 +8,7 @@ Item {
     id: page
 
     signal back()
+    signal openSystemCheck()
 
     readonly property var info: Backend.info
 
@@ -112,6 +113,30 @@ Item {
                     onClicked: Backend.openUserGuide()
                     KeyNavigation.left: githubButton
                 }
+            }
+        }
+
+        Card {
+            Layout.fillWidth: true
+            title: "Проверка системы"
+            subtitle: "Зависимости, установка Zapret и файлы менеджера"
+
+            Text {
+                width: parent.width
+                text: "Проверьте, всё ли на месте. Исправление (установка зависимостей, "
+                    + "восстановление файлов, установка Zapret) выполняется только по кнопке "
+                    + "и требует пароль администратора."
+                color: Theme.colors.on_surface_variant
+                font.pixelSize: Theme.typeSize("body_small")
+                wrapMode: Text.WordWrap
+            }
+
+            MButton {
+                id: systemCheckButton
+                text: "Открыть проверку"
+                variant: "outlined"
+                onClicked: page.openSystemCheck()
+                KeyNavigation.left: guideButton
             }
         }
 

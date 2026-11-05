@@ -257,55 +257,54 @@ Item {
         }
 
         // Лог теста.
-        Flickable {
-            id: logFlick
+        Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            clip: true
-            contentWidth: width
-            contentHeight: logColumn.implicitHeight
-            boundsBehavior: Flickable.StopAtBounds
-            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+            radius: Theme.radii.md
+            color: Theme.colors.surface_container_low
+            border.width: 1
+            border.color: Theme.colors.outline_variant
 
-            onContentHeightChanged: contentY = Math.max(0, contentHeight - height)
-
-            Rectangle {
+            Flickable {
+                id: logFlick
                 anchors.fill: parent
-                radius: Theme.radii.md
-                color: Theme.colors.surface_container_low
-                border.width: 1
-                border.color: Theme.colors.outline_variant
-            }
+                anchors.margins: Theme.spaces.md
+                clip: true
+                contentWidth: width
+                contentHeight: logColumn.implicitHeight
+                boundsBehavior: Flickable.StopAtBounds
+                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-            Column {
-                id: logColumn
+                onContentHeightChanged: contentY = Math.max(0, contentHeight - height)
 
-                width: logFlick.width - Theme.spaces.md * 2
-                x: Theme.spaces.md
-                y: Theme.spaces.md
-                spacing: 2
+                Column {
+                    id: logColumn
 
-                Repeater {
-                    model: page.lines
+                    width: logFlick.width
+                    spacing: 2
 
-                    delegate: Text {
+                    Repeater {
+                        model: page.lines
+
+                        delegate: Text {
+                            width: logColumn.width
+                            text: modelData.text
+                            color: page.kindColor(modelData.kind)
+                            font.family: "monospace"
+                            font.pixelSize: Theme.typeSize("body_small")
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+
+                    Text {
+                        visible: page.lines.length === 0
+                        text: "Лог тестирования появится здесь. Тест перезапускает службу, "
+                            + "поэтому нужен пароль sudo."
+                        color: Theme.colors.on_surface_variant
+                        font.pixelSize: Theme.typeSize("body_medium")
                         width: logColumn.width
-                        text: modelData.text
-                        color: page.kindColor(modelData.kind)
-                        font.family: "monospace"
-                        font.pixelSize: Theme.typeSize("body_small")
                         wrapMode: Text.WordWrap
                     }
-                }
-
-                Text {
-                    visible: page.lines.length === 0
-                    text: "Лог тестирования появится здесь. Тест перезапускает службу, "
-                        + "поэтому нужен пароль sudo."
-                    color: Theme.colors.on_surface_variant
-                    font.pixelSize: Theme.typeSize("body_medium")
-                    width: logColumn.width
-                    wrapMode: Text.WordWrap
                 }
             }
         }

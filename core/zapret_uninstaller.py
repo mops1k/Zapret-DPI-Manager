@@ -18,8 +18,9 @@ from core.platform_info import (
     ZAPRET_SYSTEMD_UNIT_PATH_LEGACY,
     zapret_systemd_unit_is_present,
 )
-from core.dialog_port import dialog_port
+from core.dialog_port import CallbackProgress, dialog_port
 from core.sudo_helper import run_sudo, sudo_available
+
 
 class ZapretUninstaller:
     def __init__(
@@ -28,10 +29,17 @@ class ZapretUninstaller:
         *,
         show_info_fn: Callable[[str, str], None] | None = None,
         ask_yesno_fn: Callable[[str, str], bool] | None = None,
+        progress_fn: Callable[[str, float | None], None] | None = None,
+        log_fn: Callable[[str], None] | None = None,
+        quit_on_success: bool = True,
     ):
         self.root = root_window
         self._show_info_fn = show_info_fn
         self._ask_yesno_fn = ask_yesno_fn
+        self._progress_fn = progress_fn
+        self._log_fn = log_fn
+        #: Tk-версия закрывала программу сама; в Qt-версии её закрывает экран.
+        self.quit_on_success = quit_on_success
         self.sudo_password = None
         self.progress_window = None
         self.progress_handle = None
@@ -39,6 +47,11 @@ class ZapretUninstaller:
         self.debug_log = []
         self.is_steamos = self.check_if_steamos()
         self.uninstall_successful = False
+
+    @property
+    def progress_available(self) -> bool:
+        """Есть куда показывать прогресс: Tk-окно или callback интерфейса."""
+        return bool(self.root) or self._progress_fn is not None
 
     def check_if_steamos(self):
         """Только официальная SteamOS Valve (ID=steamos)."""
@@ -54,6 +67,11 @@ class ZapretUninstaller:
         log_msg = f"[{timestamp}] {message}"
         self.debug_log.append(log_msg)
         print(log_msg)
+        if self._log_fn is not None:
+            try:
+                self._log_fn(log_msg)
+            except Exception:  # noqa: BLE001 - журнал не должен ломать удаление
+                pass
 
     def show_info(self, title, message):
         """Показывает информационное сообщение"""
@@ -62,6 +80,9 @@ class ZapretUninstaller:
             self._show_info_fn(title, message)
         else:
             dialog_port().show_info(str(title), str(message))
+
+        if not self.quit_on_success:
+            return
 
         if title == "Удаление завершено" and self.uninstall_successful:
             self.log_debug("Закрытие программы после успешного удаления...")
@@ -78,8 +99,11 @@ class ZapretUninstaller:
         return bool(dialog_port().ask_yes_no(str(title), str(message)))
 
     def create_progress_window(self, title="Прогресс"):
-        """Окно прогресса создаёт порт диалогов (Tk — в ui, Qt — в qmlui)."""
-        self.progress_handle = dialog_port().open_progress(title)
+        """Окно прогресса: callback интерфейса или порт диалогов (Tk)."""
+        if self._progress_fn is not None:
+            self.progress_handle = CallbackProgress(self._progress_fn)
+        else:
+            self.progress_handle = dialog_port().open_progress(title)
         return self.progress_handle
 
     def update_progress(self, task, progress_percent):
@@ -554,7 +578,7 @@ class ZapretUninstaller:
             return False
 
         # Создаем окно прогресса
-        if self.root:
+        if self.progress_available:
             self.progress_window = self.create_progress_window("Удаление Zapret")
             if not self.progress_window:
                 self.log_debug("Не удалось создать окно прогресса")
@@ -631,15 +655,18 @@ class ZapretUninstaller:
             if not self.restore_pacman_conf():
                 self.log_debug("Предупреждение: не удалось восстановить pacman.conf, продолжаем...")
 
-            # 9. Удаляем ярлыки
-            self.update_progress("Удаление ярлыков и кэш пароля...", 87)
+            # 9. Удаляем ярлыки (кэш пароля — после всех sudo-шагов)
+            self.update_progress("Удаление ярлыков...", 87)
             self.remove_desktop_shortcuts()
-            self.remove_sudo_cache()
 
             # 10. Удаляем зависимости
             self.update_progress("Удаление зависимостей...", 89)
             if not self.remove_dependencies():
                 self.log_debug("Предупреждение: не удалось удалить зависимости, продолжаем...")
+
+            # 10.5 Кэш пароля sudo — последним, чтобы askpass не спрашивал снова
+            self.update_progress("Удаление кэша пароля sudo...", 90)
+            self.remove_sudo_cache()
 
             # 11. Блокируем файловую систему (только для SteamOS)
             self.update_progress("Блокировка системы...", 90)
