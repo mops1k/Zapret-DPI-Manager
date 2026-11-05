@@ -13,6 +13,23 @@
   тег обязан совпадать с `version.txt`. В релиз входят оба архива и `SHA256SUMS`.
 - Пуш и публикация релиза — только по прямой просьбе пользователя.
 
+## Установщик и зависимости
+
+- Все привилегированные команды — от root: в приложении `core/sudo_helper.run_sudo`
+  (`sudo -A`), в `installer/install_zapret.sh` — `run_sudo` (`sudo -S` с паролем из установщика).
+- Valve SteamOS (`ID=steamos` в `/etc/os-release`) держит `/usr` только для чтения, поэтому
+  каждый путь установки пакетов в установщике идёт по контракту
+  `steamos_unlock` → установка → `steamos_lock`: `install_zenity_if_needed`,
+  `install_pyside6_if_needed`, `ensure_base_dependencies` и основной блок установки.
+  На SteamOS перед установкой также снимаются устаревшие `db.lck`, выполняются
+  `pacman-key --init`, `pacman-key --populate archlinux`, `pacman -Sy`.
+- PySide6: сначала пакет ОС (`pyside6 qt6-declarative` на Arch/SteamOS), при отсутствии
+  пакета в репозитории или ошибке `pacman` — pip-фолбэк в `~/.local`
+  (`PySide6-Essentials`, затем полный `PySide6`). Результат проверяется импортом
+  `PySide6.QtCore/QtGui/QtQml/QtQuick/QtQuickControls2`. Лог — `/tmp/zapret_install.log`.
+- Стенд `tools/check_installer_steamos.sh` извлекает функции по маркерам
+  `# >>> steamos helpers` и `# >>> pyside6 install helpers` — маркеры не переименовывать.
+
 ## Проверки перед коммитом
 
 ```bash
@@ -25,6 +42,7 @@ python3 tools/convert_flowseal_strategies.py --check
 python3 tools/check_bbdpi_convert.py               # конвертер BB DPI (ciadpi) → nfqws + dry-run
 python3 tools/check_github_fetch.py                # цепочка провайдеров core/github_fetch.py (без сети)
 python3 tools/check_tgws.py                         # стенд движка TG WS Proxy (obfuscated2 + WS + мост, без сети)
+bash tools/check_installer_steamos.sh               # стенд установщика: unlock→install→lock и pip-фолбэк PySide6
 ruff check core qmlui tools main.py                # конфиг в pyproject.toml
 QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software python3 main.py --selftest  # дымовой тест QML-интерфейса (83 проверки)
 ```

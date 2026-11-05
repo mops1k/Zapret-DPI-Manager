@@ -27,13 +27,233 @@ ZAPRET_SYSTEMD_UNIT_PATH_LEGACY="/usr/lib/systemd/system/zapret.service"
 WARP_OPT_DIR="/opt/warp"
 WARP_SYSTEMD_UNIT_PATH="/etc/systemd/system/warp.service"
 
-# Только Valve SteamOS: ID=steamos в /etc/os-release (как core.platform_info.is_valve_steamos)
+# >>> steamos helpers (стенд tools/check_installer_steamos.sh извлекает этот блок по маркерам)
+# Все привилегированные команды — только через run_sudo (root), он определён ниже.
+LOG_FILE="${ZAPRET_LOG_FILE:-/tmp/zapret_install.log}"
+LAST_SUDO_RC=0
+
+installer_log() {
+    printf '%s\n' "$*" >> "$LOG_FILE" 2>/dev/null || true
+}
+
+# Только Valve SteamOS: ID=steamos в os-release (как core.platform_info.is_valve_steamos).
+# Файл переопределяется ZAPRET_OS_RELEASE — этим пользуется стенд.
 is_valve_steamos() {
-    [ -f /etc/os-release ] || return 1
-    local id_line
-    id_line=$(grep -E '^ID=' /etc/os-release | head -n1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+    local os_release="${ZAPRET_OS_RELEASE:-/etc/os-release}"
+    [ -f "$os_release" ] || return 1
+    local id_line=""
+    id_line=$(grep -E '^ID=' "$os_release" | head -n1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]') || true
     [ "$id_line" = "steamos" ]
 }
+
+steamos_readonly_available() {
+    command -v steamos-readonly >/dev/null 2>&1
+}
+
+# Запускает команду от root и пишет её результат в лог. Код возврата — в LAST_SUDO_RC.
+steamos_run_logged() {
+    local rc=0 out=""
+    out=$(run_sudo "$@" 2>&1) || rc=$?
+    installer_log "sudo $* (код $rc): $out"
+    LAST_SUDO_RC=$rc
+    return 0
+}
+
+# Разблокирует /usr на Valve SteamOS. Идемпотентно: повторный disable безвреден.
+steamos_unlock() {
+    is_valve_steamos || return 0
+    if ! steamos_readonly_available; then
+        installer_log "SteamOS: steamos-readonly не найден, разблокировка невозможна"
+        return 1
+    fi
+    installer_log "SteamOS: steamos-readonly disable (root)"
+    if run_sudo steamos-readonly disable >>"$LOG_FILE" 2>&1; then
+        installer_log "SteamOS: файловая система разблокирована"
+        return 0
+    fi
+    installer_log "SteamOS: ОШИБКА разблокировки файловой системы"
+    return 1
+}
+
+# Возвращает /usr в режим только для чтения. Ошибка не прерывает установку.
+steamos_lock() {
+    is_valve_steamos || return 0
+    steamos_readonly_available || return 0
+    installer_log "SteamOS: steamos-readonly enable (root)"
+    if run_sudo steamos-readonly enable >>"$LOG_FILE" 2>&1; then
+        installer_log "SteamOS: файловая система заблокирована"
+        return 0
+    fi
+    installer_log "SteamOS: предупреждение: не удалось заблокировать файловую систему"
+    return 1
+}
+
+# Подготовка pacman на SteamOS: снятие устаревших блокировок, ключи, база пакетов.
+steamos_prepare_pacman() {
+    is_valve_steamos || return 0
+    local lock
+    echo "# SteamOS: подготовка pacman (ключи, база пакетов)..."
+    for lock in /usr/lib/holo/pacmandb/db.lck /var/lib/pacman/db.lck /var/lib/pacman/db.lck.lock; do
+        [ -e "$lock" ] || continue
+        run_sudo rm -f "$lock" >>"$LOG_FILE" 2>&1 || true
+        installer_log "SteamOS: удалён устаревший файл блокировки: $lock"
+    done
+    steamos_run_logged pacman-key --init
+    steamos_run_logged pacman-key --populate archlinux
+    steamos_run_logged pacman -Sy
+    if [ "$LAST_SUDO_RC" -ne 0 ]; then
+        echo "# SteamOS: pacman -Sy завершился с ошибкой, подробности в $LOG_FILE"
+        return 1
+    fi
+    return 0
+}
+# <<< steamos helpers
+
+# >>> pyside6 install helpers (стенд tools/check_installer_steamos.sh извлекает этот блок по маркерам)
+pyside6_import_ok() {
+    python3 -c "import PySide6.QtCore, PySide6.QtGui, PySide6.QtQml, PySide6.QtQuick, PySide6.QtQuickControls2" \
+        >>"$LOG_FILE" 2>&1
+}
+
+# Есть ли пакет в репозитории текущего пакетного менеджера.
+package_in_repo() {
+    local pkg="$1"
+    case "$PKG_MANAGER" in
+        pacman)
+            run_sudo pacman -Si "$pkg" >>"$LOG_FILE" 2>&1
+            ;;
+        apt)
+            apt-cache show "$pkg" >/dev/null 2>&1
+            ;;
+        dnf|yum)
+            "$PKG_MANAGER" info "$pkg" >/dev/null 2>&1
+            ;;
+        zypper)
+            zypper --non-interactive info "$pkg" >/dev/null 2>&1
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+}
+
+# Доставляет pip, если его нет в системе (пакетом ОС, от root).
+pyside6_ensure_pip() {
+    local python_bin="${PYTHON_BIN:-python3}"
+    "$python_bin" -m pip --version >>"$LOG_FILE" 2>&1 && return 0
+    echo "# pip не найден, ставим пакет pip через $PKG_MANAGER..."
+    case "$PKG_MANAGER" in
+        pacman) run_sudo pacman -S --noconfirm python-pip >>"$LOG_FILE" 2>&1 || return 1 ;;
+        apt) run_sudo apt install -y python3-pip >>"$LOG_FILE" 2>&1 || return 1 ;;
+        dnf) run_sudo dnf install -y python3-pip >>"$LOG_FILE" 2>&1 || return 1 ;;
+        yum) run_sudo yum install -y python3-pip >>"$LOG_FILE" 2>&1 || return 1 ;;
+        zypper) run_sudo zypper --non-interactive install python3-pip >>"$LOG_FILE" 2>&1 || return 1 ;;
+        *) installer_log "pip: неизвестный пакетный менеджер '$PKG_MANAGER'"; return 1 ;;
+    esac
+    "$python_bin" -m pip --version >>"$LOG_FILE" 2>&1
+}
+
+# Резервный путь: PySide6 из Python-менеджера пакетов (pip) в ~/.local.
+pyside6_install_with_pip() {
+    local python_bin="${PYTHON_BIN:-python3}"
+    if ! command -v "$python_bin" >/dev/null 2>&1; then
+        installer_log "pip: python3 не найден"
+        return 1
+    fi
+    pyside6_ensure_pip || return 1
+    echo "# pip: загрузка PySide6 в ~/.local (несколько минут, до ~400 МБ)..."
+    # PEP 668 (Arch/SteamOS, Debian/Ubuntu): установка в ~/.local с явным разрешением.
+    if "$python_bin" -m pip install --user --upgrade --break-system-packages PySide6-Essentials >>"$LOG_FILE" 2>&1 \
+        && pyside6_import_ok; then
+        return 0
+    fi
+    echo "# pip: пробуем полный пакет PySide6..."
+    if "$python_bin" -m pip install --user --upgrade --break-system-packages PySide6 >>"$LOG_FILE" 2>&1 \
+        && pyside6_import_ok; then
+        return 0
+    fi
+    echo "# pip: пробуем без --break-system-packages (старые версии pip)..."
+    if "$python_bin" -m pip install --user --upgrade PySide6-Essentials >>"$LOG_FILE" 2>&1 \
+        && pyside6_import_ok; then
+        return 0
+    fi
+    installer_log "pip: установить PySide6 не удалось, подробности в $LOG_FILE"
+    return 1
+}
+
+# Ставит PySide6 и QML: пакетом ОС, при неудаче — через pip. Печатает протокол прогресса для show_progress.
+install_pyside6_packages() {
+    echo "10"
+    echo "# Подготовка к установке PySide6 и QML..."
+
+    if [ "$SYSTEM_TYPE" = "immutable" ]; then
+        echo "30"
+        echo "# Установка PySide6 в слой системы rpm-ostree..."
+        local pkg rpm_ok=true
+        for pkg in $QML_PKGS; do
+            run_sudo rpm -q "$pkg" >>"$LOG_FILE" 2>&1 || rpm_ok=false
+        done
+        if [ "$rpm_ok" = true ]; then
+            echo "100"
+            echo "# Пакет $QML_PKGS уже установлен в системе"
+            return 0
+        fi
+        echo "50"
+        echo "# Выполнение: rpm-ostree install $QML_PKGS"
+        if run_sudo rpm-ostree install $QML_PKGS >>"$LOG_FILE" 2>&1; then
+            echo "REBOOT_REQUIRED=true" > /tmp/zapret_pyside6_reboot
+            echo "100"
+            echo "# Пакет $QML_PKGS добавлен в следующий слой системы, нужна перезагрузка"
+            return 0
+        fi
+        installer_log "rpm-ostree: установка $QML_PKGS не удалась"
+        echo "ERROR: ошибка установки через rpm-ostree" >&2
+        return 1
+    fi
+
+    if is_valve_steamos; then
+        steamos_prepare_pacman || true
+    fi
+
+    echo "20"
+    local pkg repo_ok=true
+    for pkg in $QML_PKGS; do
+        echo "# Проверка пакета в репозитории: $pkg"
+        if ! package_in_repo "$pkg"; then
+            repo_ok=false
+        fi
+    done
+
+    if [ "$repo_ok" = true ]; then
+        if [ -n "$PKG_UPDATE" ]; then
+            echo "30"
+            echo "# Обновление репозиториев ($PKG_MANAGER)..."
+            run_sudo $PKG_UPDATE >>"$LOG_FILE" 2>&1 || true
+        fi
+        echo "50"
+        echo "# Установка пакета $QML_PKGS через $PKG_MANAGER..."
+        if run_sudo $PKG_INSTALL $QML_PKGS >>"$LOG_FILE" 2>&1 && pyside6_import_ok; then
+            echo "100"
+            echo "# PySide6 и QML успешно установлены"
+            return 0
+        fi
+        echo "80"
+        echo "# Пакеты ОС не дали рабочего PySide6, переходим на pip"
+    else
+        echo "80"
+        echo "# Пакета нет в репозитории, ставим PySide6 через pip"
+    fi
+
+    echo "85"
+    if pyside6_install_with_pip && pyside6_import_ok; then
+        echo "100"
+        echo "# PySide6 установлен через pip в домашний каталог"
+        return 0
+    fi
+    echo "ERROR: PySide6 не удалось установить ни пакетом ОС, ни через pip" >&2
+    return 1
+}
+# <<< pyside6 install helpers
 
 # === ПЕРЕМЕННЫЕ ДЛЯ РЕЖИМА ОТОБРАЖЕНИЯ ===
 USE_ZENITY=true
@@ -84,36 +304,52 @@ install_zenity_if_needed() {
 
     echo "Пытаемся установить Zenity..."
 
+    # SteamOS: /usr только для чтения — разблокируем на время установки (от root).
+    local zenity_unlocked=false
+    if is_valve_steamos; then
+        if steamos_unlock; then
+            zenity_unlocked=true
+            echo "SteamOS: файловая система разблокирована для установки zenity"
+        else
+            echo "SteamOS: не удалось разблокировать файловую систему"
+        fi
+    fi
+
     # Пробуем разные способы установки
     local installed=false
 
     if command -v pacman &> /dev/null; then
         echo "Пробуем установить через pacman..."
-        if echo "$temp_password" | sudo -S pacman -S --noconfirm zenity 2>/dev/null; then
+        if echo "$temp_password" | sudo -S pacman -S --noconfirm zenity >>"$LOG_FILE" 2>&1; then
             installed=true
         else
             echo "Не удалось установить через pacman, пробуем другой метод..."
             # Пробуем с обновлением базы данных
-            echo "$temp_password" | sudo -S pacman -Syy --noconfirm 2>/dev/null || true
-            echo "$temp_password" | sudo -S pacman -S --noconfirm zenity 2>/dev/null || true
+            echo "$temp_password" | sudo -S pacman -Syy --noconfirm >>"$LOG_FILE" 2>&1 || true
+            echo "$temp_password" | sudo -S pacman -S --noconfirm zenity >>"$LOG_FILE" 2>&1 || true
         fi
     fi
 
     # Проверяем другие пакетные менеджеры если pacman не сработал
     if ! $installed && command -v apt &> /dev/null; then
         echo "Пробуем установить через apt..."
-        echo "$temp_password" | sudo -S apt update && \
-        echo "$temp_password" | sudo -S apt install -y zenity 2>/dev/null && installed=true
+        echo "$temp_password" | sudo -S apt update >>"$LOG_FILE" 2>&1 && \
+        echo "$temp_password" | sudo -S apt install -y zenity >>"$LOG_FILE" 2>&1 && installed=true
     fi
 
     if ! $installed && command -v dnf &> /dev/null; then
         echo "Пробуем установить через dnf..."
-        echo "$temp_password" | sudo -S dnf install -y zenity 2>/dev/null && installed=true
+        echo "$temp_password" | sudo -S dnf install -y zenity >>"$LOG_FILE" 2>&1 && installed=true
     fi
 
     if ! $installed && command -v zypper &> /dev/null; then
         echo "Пробуем установить через zypper..."
-        echo "$temp_password" | sudo -S zypper install -y zenity 2>/dev/null && installed=true
+        echo "$temp_password" | sudo -S zypper install -y zenity >>"$LOG_FILE" 2>&1 && installed=true
+    fi
+
+    # Возвращаем защиту /usr на SteamOS независимо от результата установки.
+    if [ "$zenity_unlocked" = true ]; then
+        steamos_lock || true
     fi
 
     # Проверяем, установился ли zenity
@@ -210,145 +446,6 @@ detect_system_type() {
     return 0
 }
 
-# === ФУНКЦИЯ: Установка PySide6 (QML) с отображением прогресса ===
-install_pyside6_with_progress() {
-    local temp_password="$1"
-
-    # Создаем временный скрипт для установки с прогрессом
-    local temp_script=$(mktemp)
-
-    cat > "$temp_script" << EOF
-#!/bin/bash
-PASSWORD="$1"
-
-# Функция для выполнения команд с sudo
-run_sudo() {
-    echo "\$PASSWORD" | sudo -S "\$@" 2>/dev/null
-}
-
-echo "10"
-echo "# Подготовка к установке PySide6 и QML..."
-
-SYSTEM_TYPE="$SYSTEM_TYPE"
-PKG_MANAGER="$PKG_MANAGER"
-PKG_UPDATE="$PKG_UPDATE"
-PKG_INSTALL="$PKG_INSTALL"
-QML_PKGS="$QML_PKGS"
-
-echo "20"
-echo "# Определен тип системы: \$SYSTEM_TYPE"
-
-# Особый случай для rpm-ostree (иммутабельные системы)
-if [ "\$SYSTEM_TYPE" = "immutable" ]; then
-    echo "30"
-    echo "# Установка PySide6 в слой системы rpm-ostree..."
-    
-    # Проверяем, не установлен ли уже пакет (опционально)
-    if run_sudo rpm -q \$QML_PKGS &>/dev/null; then
-        echo "80"
-        echo "# Пакет \$QML_PKGS уже установлен"
-        echo "100"
-        echo "# Готово"
-        exit 0
-    fi
-    
-    echo "50"
-    echo "# Выполнение: rpm-ostree install \$QML_PKGS"
-    echo "# Установка пакета \$QML_PKGS (займет некоторое время)..."
-    
-    # Выполняем установку через rpm-ostree
-    if run_sudo rpm-ostree install \$QML_PKGS; then
-        echo "90"
-        echo "# Пакет \$QML_PKGS добавлен в следующий слой системы"
-        echo "# После перезагрузки PySide6 станет доступен"
-        echo "100"
-        echo "# Установка завершена. ТРЕБУЕТСЯ ПЕРЕЗАГРУЗКА!"
-        
-        # Устанавливаем флаг перезагрузки
-        echo "REBOOT_REQUIRED=true" > /tmp/zapret_pyside6_reboot
-        exit 0
-    else
-        # Проверяем, может пакет уже был в очереди
-        if run_sudo rpm-ostree status | grep -q "Pending" && run_sudo rpm-ostree status | grep -q "\$QML_PKGS" 2>/dev/null; then
-            echo "90"
-            echo "# Пакет \$QML_PKGS уже ожидает установки после перезагрузки"
-            echo "100"
-            echo "# ТРЕБУЕТСЯ ПЕРЕЗАГРУЗКА!"
-            echo "REBOOT_REQUIRED=true" > /tmp/zapret_pyside6_reboot
-            exit 0
-        else
-            echo "ERROR: Ошибка установки через rpm-ostree" >&2
-            exit 1
-        fi
-    fi
-fi
-
-# Для обычных систем (не rpm-ostree) - стандартная установка
-if [ -n "\$PKG_UPDATE" ]; then
-    echo "30"
-    echo "# Обновление репозиториев..."
-    run_sudo \$PKG_UPDATE
-fi
-
-echo "50"
-echo "# Установка пакета \$QML_PKGS..."
-if run_sudo \$PKG_INSTALL \$QML_PKGS; then
-    echo "80"
-    echo "# Пакеты успешно установлены"
-else
-    echo "ERROR: Ошибка установки через \$PKG_MANAGER" >&2
-    exit 1
-fi
-
-echo "90"
-echo "# Проверка установки PySide6 и QML..."
-
-# Для обычных систем проверяем import
-if python3 -c "import PySide6.QtQml, PySide6.QtQuick, PySide6.QtQuickControls2" 2>/dev/null; then
-    echo "100"
-    echo "# PySide6 и QML успешно установлены!"
-    exit 0
-else
-    # Если не импортируется, но установка прошла - возможно нужен рестарт
-    echo "95"
-    echo "# Пакет установлен, но для полной активации может потребоваться перезагрузка"
-    echo "100"
-    echo "# Готово"
-    exit 0
-fi
-EOF
-
-    chmod +x "$temp_script"
-
-    # Запускаем установку с отображением прогресса
-    if [ "$USE_ZENITY" = true ] && [ "$ZENITY_INSTALLED" = true ]; then
-        bash "$temp_script" "$temp_password" 2>&1 | \
-        show_progress "Установка PySide6" "Установка компонентов GUI..."
-
-        local pipestatus=${PIPESTATUS[0]}
-        rm -f "$temp_script"
-        
-        # Всегда возвращаем успех для rpm-ostree, даже если import не проверяли
-        if [ "$SYSTEM_TYPE" = "immutable" ]; then
-            return 0
-        else
-            return $pipestatus
-        fi
-    else
-        # Консольный режим
-        bash "$temp_script" "$temp_password"
-        local result=$?
-        rm -f "$temp_script"
-        
-        # Для rpm-ostree игнорируем результат проверки import
-        if [ "$SYSTEM_TYPE" = "immutable" ]; then
-            return 0
-        else
-            return $result
-        fi
-    fi
-}
-
 # === ФУНКЦИЯ: Проверка базовых зависимостей (python3, sudo, systemd, nft/iptables, wget/curl) ===
 ensure_base_dependencies() {
     echo "Проверка базовых зависимостей..."
@@ -388,46 +485,64 @@ ensure_base_dependencies() {
         return 1
     fi
 
-    if echo "$SUDO_PASSWORD" | sudo -S $PKG_UPDATE >/dev/null 2>&1 || true; then :; fi
-    if echo "$SUDO_PASSWORD" | sudo -S $PKG_INSTALL "${missing[@]}" 2>/dev/null; then
-        echo "Зависимости установлены: ${missing[*]}"
-        return 0
+    # SteamOS: /usr только для чтения — установка пакетов только после разблокировки (от root).
+    local steamos_unlocked=false
+    if is_valve_steamos; then
+        if steamos_unlock; then
+            steamos_unlocked=true
+            steamos_prepare_pacman || true
+        else
+            echo "SteamOS: не удалось разблокировать файловую систему — пакеты не установятся" >&2
+            return 1
+        fi
     fi
-    echo "Не удалось установить: ${missing[*]}" >&2
-    return 1
+
+    local result=1
+    if [ -n "$PKG_UPDATE" ]; then
+        run_sudo $PKG_UPDATE >>"$LOG_FILE" 2>&1 || true
+    fi
+    if run_sudo $PKG_INSTALL "${missing[@]}" >>"$LOG_FILE" 2>&1; then
+        echo "Зависимости установлены: ${missing[*]}"
+        result=0
+    else
+        echo "Не удалось установить: ${missing[*]} (подробности: $LOG_FILE)" >&2
+    fi
+
+    if [ "$steamos_unlocked" = true ]; then
+        steamos_lock || true
+    fi
+    return "$result"
 }
 
 # === ФУНКЦИЯ: Проверка и установка PySide6 (QML) ===
 install_pyside6_if_needed() {
     echo "Проверка наличия PySide6 и QML (GUI Python)..."
 
-    # Определяем тип системы, если еще не определен
+    if pyside6_import_ok; then
+        echo "PySide6 найден"
+        return 0
+    fi
+
     if [ -z "$SYSTEM_TYPE" ]; then
         detect_system_type || true
     fi
 
-    # Для rpm-ostree систем не проверяем import, просто проверяем наличие пакета
     if [ "$SYSTEM_TYPE" = "immutable" ]; then
-        if rpm -q "$QML_PKGS" &>/dev/null; then
+        local pkg all_installed=true
+        for pkg in $QML_PKGS; do
+            rpm -q "$pkg" &>/dev/null || all_installed=false
+        done
+        if [ "$all_installed" = true ]; then
             echo "Пакет $QML_PKGS уже установлен в системе"
             return 0
-        else
-            echo "Пакет $QML_PKGS не найден, требуется установка"
         fi
-    else
-        # Для обычных систем проверяем import
-        if python3 -c "import PySide6.QtQml, PySide6.QtQuick, PySide6.QtQuickControls2" 2>/dev/null; then
-            echo "PySide6 найден"
-            return 0
-        fi
+        echo "Пакет $QML_PKGS не найден, требуется установка"
     fi
 
-    # Определяем тип системы
     if ! detect_system_type; then
-        local manual_text="Не удалось определить тип системы.\n\nУстановите PySide6 и QML-модули вручную:\n• Debian/Ubuntu: sudo apt install python3-pyside6.qml qml6-module-qtquick-controls qml6-module-qtquick-layouts qml6-module-qtquick-effects\n• Fedora: sudo dnf install python3-pyside6 qt6-qtdeclarative\n• Arch/SteamOS: sudo pacman -S pyside6 qt6-declarative\n• openSUSE: sudo zypper install python3-pyside6\n• Bazzite/Fedora Silverblue: sudo rpm-ostree install python3-pyside6 qt6-qtdeclarative\n\nЗатем снова запустите скрипт установки."
+        local manual_text="Не удалось определить тип системы.\n\nУстановите PySide6 и QML-модули вручную:\n• Debian/Ubuntu: sudo apt install python3-pyside6.qml qml6-module-qtquick-controls qml6-module-qtquick-layouts qml6-module-qtquick-effects\n• Fedora: sudo dnf install python3-pyside6 qt6-qtdeclarative\n• Arch/SteamOS: sudo pacman -S pyside6 qt6-declarative\n• openSUSE: sudo zypper install python3-pyside6\n• Bazzite/Fedora Silverblue: sudo rpm-ostree install python3-pyside6 qt6-qtdeclarative\n• Любая система: python3 -m pip install --user PySide6\n\nЗатем снова запустите скрипт установки."
 
         if [ "$USE_ZENITY" = true ] && [ "$ZENITY_INSTALLED" = true ]; then
-            # Для Zenity используем printf для форматирования
             local formatted_text
             formatted_text=$(printf "%b" "$manual_text")
             zenity --error --title="Ошибка определения системы" --text="$formatted_text" --no-markup --width=400 2>/dev/null || true
@@ -439,12 +554,11 @@ install_pyside6_if_needed() {
         return 1
     fi
 
-    # Показываем сообщение о необходимости установки
     local install_message="Для графического интерфейса Zapret DPI Manager требуются PySide6 и QML-модули Qt (Python).\n\n"
     install_message+="Обнаружена система: $SYSTEM_TYPE\n"
     install_message+="Пакетный менеджер: $PKG_MANAGER\n"
     install_message+="Пакет для установки: $QML_PKGS\n\n"
-    install_message+="Сейчас будет выполнена автоматическая установка."
+    install_message+="Если пакета нет в репозитории или установка не удастся, PySide6 будет установлен через pip в домашний каталог."
 
     if [ "$USE_ZENITY" = true ] && [ "$ZENITY_INSTALLED" = true ]; then
         local formatted_msg
@@ -489,87 +603,72 @@ install_pyside6_if_needed() {
         fi
     fi
 
-    # Устанавливаем PySide6
-    # SteamOS: /usr только для чтения — разблокируем ФС на время установки пакетов.
-    STEAMOS_UNLOCKED=false
+    # SteamOS: /usr только для чтения — разблокируем ФС на время установки пакетов (от root).
+    local steamos_unlocked=false
     if is_valve_steamos; then
-        if echo "$temp_password" | sudo -S steamos-readonly disable 2>/dev/null; then
-            STEAMOS_UNLOCKED=true
+        if steamos_unlock; then
+            steamos_unlocked=true
             echo "SteamOS: файловая система разблокирована для установки PySide6"
+        else
+            echo "SteamOS: не удалось разблокировать файловую систему"
         fi
     fi
-    if [ "$USE_ZENITY" = true ] && [ "$ZENITY_INSTALLED" = true ]; then
-        if install_pyside6_with_progress "$temp_password"; then
-            # Проверяем флаг перезагрузки для rpm-ostree
-            if [ -f /tmp/zapret_pyside6_reboot ]; then
-                REBOOT_REQUIRED=true
-                rm -f /tmp/zapret_pyside6_reboot
 
-                # Сразу показываем сообщение о перезагрузке
-                zenity --info \
-                    --title="⚠️ Требуется перезагрузка" \
-                    --text="PySide6 добавлен в систему.\n\nПосле завершения установки Zapret DPI Manager НЕ ЗАБУДЬТЕ ПЕРЕЗАГРУЗИТЬ СИСТЕМУ, иначе программа не сможет запуститься." \
-                    --width=450 \
-                    2>/dev/null
-            fi
-            if [ "$STEAMOS_UNLOCKED" = true ]; then
-                echo "$temp_password" | sudo -S steamos-readonly enable 2>/dev/null || true
-            fi
-            return 0
+    local install_status=0
+    set +e
+    install_pyside6_packages 2>&1 | show_progress "Установка PySide6" "Установка компонентов GUI..."
+    install_status=${PIPESTATUS[0]}
+    set -e
+
+    if [ -f /tmp/zapret_pyside6_reboot ]; then
+        REBOOT_REQUIRED=true
+        rm -f /tmp/zapret_pyside6_reboot
+        if [ "$USE_ZENITY" = true ] && [ "$ZENITY_INSTALLED" = true ]; then
+            zenity --info \
+                --title="⚠️ Требуется перезагрузка" \
+                --text="PySide6 добавлен в систему.\n\nПосле завершения установки Zapret DPI Manager НЕ ЗАБУДЬТЕ ПЕРЕЗАГРУЗИТЬ СИСТЕМУ, иначе программа не сможет запуститься." \
+                --width=450 \
+                2>/dev/null || true
         else
-            local error_text="Не удалось установить PySide6 автоматически.\n\n"
-            error_text+="Тип системы: $SYSTEM_TYPE\n"
-            error_text+="Попробуйте установить вручную:\n"
-            error_text+="sudo $PKG_INSTALL $QML_PKGS"
-
-            local formatted_error
-            formatted_error=$(printf "%b" "$error_text")
-            zenity --error --title="Ошибка установки PySide6" --text="$formatted_error" --no-markup --width=400 2>/dev/null || true
-            if [ "$STEAMOS_UNLOCKED" = true ]; then
-                echo "$temp_password" | sudo -S steamos-readonly enable 2>/dev/null || true
-            fi
-            return 1
-        fi
-    else
-        # Консольный режим
-        echo "Установка PySide6 через $PKG_MANAGER..."
-
-        if [ -n "$PKG_UPDATE" ]; then
-            echo "Обновление репозиториев..."
-            echo "$temp_password" | sudo -S $PKG_UPDATE 2>/dev/null || true
-        fi
-
-        echo "Установка пакета $QML_PKGS..."
-        if echo "$temp_password" | sudo -S $PKG_INSTALL $QML_PKGS 2>/dev/null; then
-            # Проверяем флаг перезагрузки для rpm-ostree
-            if [ -f /tmp/zapret_pyside6_reboot ]; then
-                REBOOT_REQUIRED=true
-                rm -f /tmp/zapret_pyside6_reboot
-
-                echo ""
-                echo "⚠️  ВНИМАНИЕ: Для завершения установки PySide6"
-                echo "   потребуется перезагрузка системы!"
-                echo ""
-                sleep 3
-            fi
-            echo "PySide6 успешно установлен"
-            if [ "$STEAMOS_UNLOCKED" = true ]; then
-                echo "$temp_password" | sudo -S steamos-readonly enable 2>/dev/null || true
-            fi
-            return 0
-        else
-            echo "Ошибка установки PySide6"
-            echo "Попробуйте установить вручную:"
-            echo "sudo $PKG_INSTALL $QML_PKGS"
             echo ""
-            echo "Нажмите Enter для продолжения..."
-            read
-            if [ "$STEAMOS_UNLOCKED" = true ]; then
-                echo "$temp_password" | sudo -S steamos-readonly enable 2>/dev/null || true
-            fi
-            return 1
+            echo "⚠️  ВНИМАНИЕ: для завершения установки PySide6 потребуется перезагрузка системы!"
+            echo ""
+            sleep 3
         fi
     fi
+
+    # Возвращаем защиту /usr независимо от результата.
+    if [ "$steamos_unlocked" = true ]; then
+        steamos_lock || true
+    fi
+
+    if [ "$install_status" -eq 0 ]; then
+        echo "PySide6 успешно установлен"
+        return 0
+    fi
+
+    echo "Ошибка установки PySide6"
+    echo "Попробуйте установить вручную:"
+    echo "  sudo $PKG_INSTALL $QML_PKGS"
+    echo "  python3 -m pip install --user PySide6"
+    echo "Подробности: $LOG_FILE"
+
+    if [ "$USE_ZENITY" = true ] && [ "$ZENITY_INSTALLED" = true ]; then
+        local error_text="Не удалось установить PySide6 автоматически.\n\n"
+        error_text+="Тип системы: $SYSTEM_TYPE\n"
+        error_text+="Попробуйте установить вручную:\n"
+        error_text+="sudo $PKG_INSTALL $QML_PKGS\n"
+        error_text+="или: python3 -m pip install --user PySide6\n\n"
+        error_text+="Подробности: $LOG_FILE"
+
+        local formatted_error
+        formatted_error=$(printf "%b" "$error_text")
+        zenity --error --title="Ошибка установки PySide6" --text="$formatted_error" --no-markup --width=400 2>/dev/null || true
+    else
+        echo "Нажмите Enter для продолжения..."
+        read
+    fi
+    return 1
 }
 
 # === АДАПТИВНЫЕ ФУНКЦИИ ОТОБРАЖЕНИЯ ===
@@ -828,6 +927,8 @@ remove_old_files() {
 
     cat > "$temp_script" << EOF
 #!/bin/bash
+# Скрипт запускается через run_sudo — то есть уже от root: steamos-readonly ниже
+# не требует sudo, но и не должен вызываться иначе.
 echo "10"
 echo "# Разблокировка системы SteamOS..."
 steamos-readonly disable 2>/dev/null || true
@@ -997,11 +1098,12 @@ set -o pipefail
     if is_valve_steamos; then
         echo "# Разблокировка файловой системы SteamOS..."
         # Возвращаем защиту ФС в любом случае, даже при обрыве установки.
-        trap 'run_sudo steamos-readonly enable >/dev/null 2>&1 || true' EXIT
-        if ! run_sudo steamos-readonly disable; then
+        trap 'steamos_lock >/dev/null 2>&1 || true' EXIT
+        if ! steamos_unlock; then
             echo "Ошибка разблокировки системы" >&2
             exit 1
         fi
+        steamos_prepare_pacman || true
         echo "Система разблокирована"
     else
         echo "# Пропуск разблокировки (не SteamOS)"
@@ -1360,7 +1462,7 @@ InitialPreference=9
     echo "100"
     if is_valve_steamos; then
         echo "# Блокировка файловой системы SteamOS..."
-        run_sudo steamos-readonly enable
+        steamos_lock || true
         echo "Система заблокирована"
     else
         echo "# Пропуск блокировки (не SteamOS)"
@@ -1369,6 +1471,10 @@ InitialPreference=9
 ) | show_progress "Установка Zapret DPI Manager 2.0" "Начинаем установку..."
 INSTALL_STATUS=$?
 set +o pipefail
+# Страховка: защита /usr возвращается, даже если установка прервалась.
+if is_valve_steamos; then
+    steamos_lock >/dev/null 2>&1 || true
+fi
 if [ "$INSTALL_STATUS" -ne 0 ]; then
     show_error "Ошибка" "Установка была прервана или произошла ошибка.\n\nПроверьте лог: /tmp/zapret_install.log"
     exit 1
@@ -1390,7 +1496,7 @@ else
 fi
 if [ "$QML_GUI_OK" != true ]; then
     show_message "Не хватает зависимостей" \
-        "Графический интерфейс может не запуститься.\n\nПроверьте, что установлен PySide6 с QML-модулями:\n• Arch/SteamOS: sudo pacman -S pyside6 qt6-declarative\n• Debian/Ubuntu: sudo apt install python3-pyside6.qml qml6-module-qtquick-controls qml6-module-qtquick-layouts qml6-module-qtquick-effects\n• Fedora: sudo dnf install python3-pyside6 qt6-qtdeclarative\n\nПодробности установки: /tmp/zapret_install.log"
+        "Графический интерфейс может не запуститься.\n\nПроверьте, что установлен PySide6 с QML-модулями:\n• Arch/SteamOS: sudo pacman -S pyside6 qt6-declarative\n• Debian/Ubuntu: sudo apt install python3-pyside6.qml qml6-module-qtquick-controls qml6-module-qtquick-layouts qml6-module-qtquick-effects\n• Fedora: sudo dnf install python3-pyside6 qt6-qtdeclarative\n• Любая система (если пакета нет в репозитории): python3 -m pip install --user PySide6\n\nПодробности установки: /tmp/zapret_install.log"
 fi
 
 # Очистка временных файлов PySide6
