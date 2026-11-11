@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -379,6 +380,46 @@ def _run_selftest(app, engine, backend, theme, log) -> int:
             ("статус WARP прочитан", bool(warp.get("title"))),
             ("фокус на кнопке службы", "Zapret DPI" in focus_text()),
         ]
+
+        # Модалка пароля sudo: заявка из рабочего потока → окно, фокус, отмена.
+        password_dialog = window.findChild(QObject, "sudoPasswordDialog")
+        checks.append(("модалка пароля sudo не видна на старте",
+                       password_dialog is not None
+                       and password_dialog.property("visible") is False))
+        before_focus = window.activeFocusItem()
+        password_result = {}
+
+        def _request_password() -> None:
+            password_result["password"] = backend._sudo_password_request()
+
+        password_thread = threading.Thread(target=_request_password, daemon=True)
+        password_thread.start()
+        wait(500)
+        password_field = window.findChild(QObject, "sudoPasswordField")
+        remember_check = window.findChild(QObject, "sudoRememberCheck")
+        submit_button = window.findChild(QObject, "sudoSubmitButton")
+        checks.append(("модалка пароля sudo появилась",
+                       password_dialog is not None
+                       and password_dialog.property("visible") is True))
+        checks.append(("поле пароля в фокусе",
+                       password_field is not None
+                       and password_field.property("activeFocus") is True))
+        checks.append(("галочка «Запомнить» выключена",
+                       remember_check is not None
+                       and remember_check.property("checked") is False))
+        checks.append(("«Подтвердить» заблокирована без пароля",
+                       submit_button is not None
+                       and submit_button.property("enabled") is False))
+        backend.cancelSudoPassword()
+        wait(400)
+        checks.append(("отмена закрывает модалку",
+                       password_dialog is not None
+                       and password_dialog.property("visible") is False))
+        checks.append(("отмена возвращает пустой пароль",
+                       password_result.get("password") is None))
+        if before_focus is not None:
+            before_focus.forceActiveFocus()
+        wait(100)
         # Окружение: в CI менеджер не установлен, поэтому «средовые» проверки
         # (списки, WARP, отчёты, тестер) помечаются SKIP, а не FAIL.
         from pathlib import Path as _Path

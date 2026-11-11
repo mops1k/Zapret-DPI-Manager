@@ -64,6 +64,9 @@ jobs:
       - name: GitHub fetch chain (offline)
         run: python tools/check_github_fetch.py
 
+      - name: sudo password policy (fake sudo, offline)
+        run: python tools/check_sudo_password.py
+
       - name: TG WS Proxy engine (offline end-to-end)
         run: python tools/check_tgws.py
 

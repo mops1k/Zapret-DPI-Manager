@@ -20,7 +20,16 @@ from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
 from core.app_logging import get_error_logger
 from core.manager_config import GITHUB_BASE_URL, VERSION_CONFIG
 from core.service_manager import ServiceManager
-from core.sudo_helper import sudo_available
+from core.sudo_helper import (
+    check_sudo_password,
+    clear_password_provider,
+    clear_session_password,
+    forget_cached_password,
+    forget_saved_password,
+    save_cached_password,
+    set_password_provider,
+    sudo_available,
+)
 
 MANAGER_DIR = Path.home() / "Zapret_DPI_Manager"
 CONFIG_FILE = MANAGER_DIR / "config.txt"
@@ -34,6 +43,9 @@ GUIDE_URL = (
 
 #: Предел длины текста ошибки службы в статусной строке.
 ERROR_LIMIT = 700
+
+#: Сколько ждём ответа в модалке пароля sudo, прежде чем отменить операцию.
+SUDO_PROMPT_TIMEOUT = 300.0
 
 STATE_LABELS = {
     "active": "Работает",
@@ -1548,6 +1560,16 @@ def _tgws_save(
     return True, "настройки сохранены"
 
 
+class _SudoPasswordRequest:
+    """Одна заявка на пароль: все ожидающие потоки получают один ответ."""
+
+    __slots__ = ("event", "password")
+
+    def __init__(self) -> None:
+        self.event = threading.Event()
+        self.password: str | None = None
+
+
 class Backend(QObject):
     """Состояние приложения и действия над службой zapret."""
 
@@ -1555,6 +1577,7 @@ class Backend(QObject):
     autostartChanged = Signal()
     strategyChanged = Signal()
     busyChanged = Signal()
+    sudoPasswordChanged = Signal()
     messageChanged = Signal()
     strategiesChanged = Signal()
     strategyBusyChanged = Signal()
@@ -1635,6 +1658,9 @@ class Backend(QObject):
     _syscheckLineReady = Signal(str)
     _syscheckChecked = Signal("QVariantMap", bool)
     _syscheckRepaired = Signal("QVariantMap", bool)
+    _sudoPasswordAsk = Signal()
+    _sudoPasswordDone = Signal()
+    _sudoPasswordError = Signal(str)
 
     #: Предел журнала удаления: старые строки отбрасываются.
     UNINSTALL_LOG_LIMIT = 400
@@ -1709,6 +1735,15 @@ class Backend(QObject):
         self._syscheck_attention = False
         self._threads: list[threading.Thread] = []
 
+        # Пароль sudo: одна Qt-модалка на все ожидающие операции.
+        self._pw_lock = threading.Lock()
+        self._pw_request: _SudoPasswordRequest | None = None
+        self._pw_visible = False
+        self._pw_busy = False
+        self._pw_error = ""
+        self._ops_lock = threading.Lock()
+        self._ops_active = 0
+
         self._statusReady.connect(self._apply_status)
         self._strategyReady.connect(self._apply_strategy)
         self._operationFinished.connect(self._apply_operation)
@@ -1753,6 +1788,10 @@ class Backend(QObject):
         self._syscheckLineReady.connect(self._apply_syscheck_line)
         self._syscheckChecked.connect(self._apply_system_checked)
         self._syscheckRepaired.connect(self._apply_system_repaired)
+        self._sudoPasswordAsk.connect(self._apply_sudo_password_ask)
+        self._sudoPasswordDone.connect(self._apply_sudo_password_done)
+        self._sudoPasswordError.connect(self._apply_sudo_password_error)
+        set_password_provider(self._sudo_password_request)
 
         self._timer = QTimer(self)
         self._timer.setInterval(4000)
@@ -3035,7 +3074,22 @@ class Backend(QObject):
         self.refresh()
 
     def _spawn(self, target, *args) -> None:
-        thread = threading.Thread(target=target, args=args, daemon=True)
+        # Счётчик активных действий: когда последнее закончилось, пароль sudo
+        # забывается — без галочки «Запомнить» следующее действие спросит снова.
+        with self._ops_lock:
+            self._ops_active += 1
+
+        def runner() -> None:
+            try:
+                target(*args)
+            finally:
+                with self._ops_lock:
+                    self._ops_active -= 1
+                    done = self._ops_active == 0
+                if done:
+                    clear_session_password()
+
+        thread = threading.Thread(target=runner, daemon=True)
         thread.start()
         self._threads = [t for t in self._threads if t.is_alive()] + [thread]
 
@@ -3187,11 +3241,124 @@ class Backend(QObject):
         except Exception as exc:  # noqa: BLE001
             self._set_message(f"Не удалось открыть руководство: {exc}", "error")
 
+    # -- Пароль sudo: Qt-модалка --------------------------------------------
+
+    @Property(bool, notify=sudoPasswordChanged)
+    def sudoPasswordRequested(self) -> bool:
+        """Нужно показать модалку пароля sudo."""
+        return self._pw_visible
+
+    @Property(bool, notify=sudoPasswordChanged)
+    def sudoPasswordBusy(self) -> bool:
+        """Модалка проверяет введённый пароль."""
+        return self._pw_busy
+
+    @Property(str, notify=sudoPasswordChanged)
+    def sudoPasswordError(self) -> str:
+        """Текст ошибки проверки пароля (пусто — ошибки нет)."""
+        return self._pw_error
+
+    def _sudo_password_request(self) -> str | None:
+        """Провайдер для core.sudo_helper: вызывается из рабочего потока.
+
+        Заявка одна на всех ожидающих: модалка показывается один раз, ответ
+        получают все. Возвращает пароль или None (отмена/таймаут).
+        """
+        with self._pw_lock:
+            request = self._pw_request
+            if request is None:
+                request = _SudoPasswordRequest()
+                self._pw_request = request
+                self._sudoPasswordAsk.emit()
+        request.event.wait(SUDO_PROMPT_TIMEOUT)
+        if not request.event.is_set():
+            with self._pw_lock:
+                if self._pw_request is request:
+                    self._pw_request = None
+            self._sudoPasswordDone.emit()
+        return request.password
+
+    def _apply_sudo_password_ask(self) -> None:
+        if self._pw_visible:
+            return
+        self._pw_visible = True
+        self._pw_busy = False
+        self._pw_error = ""
+        self.sudoPasswordChanged.emit()
+
+    def _apply_sudo_password_done(self) -> None:
+        # Новая заявка могла появиться раньше доставки сигнала — её не скрываем.
+        if self._pw_request is not None:
+            return
+        self._pw_visible = False
+        self._pw_busy = False
+        self._pw_error = ""
+        self.sudoPasswordChanged.emit()
+
+    def _apply_sudo_password_error(self, error: str) -> None:
+        self._pw_busy = False
+        self._pw_error = str(error or "Неверный пароль sudo")
+        self.sudoPasswordChanged.emit()
+
+    @Slot(str, bool)
+    def submitSudoPassword(self, password: str, remember: bool) -> None:
+        """Пользователь отправил пароль из модалки."""
+        if not self._pw_visible or self._pw_busy:
+            return
+        text = str(password or "")
+        if not text:
+            self._pw_error = "Введите пароль sudo"
+            self.sudoPasswordChanged.emit()
+            return
+        self._pw_busy = True
+        self._pw_error = ""
+        self.sudoPasswordChanged.emit()
+        self._spawn(self._sudo_password_check_worker, text, bool(remember))
+
+    @Slot()
+    def cancelSudoPassword(self) -> None:
+        """Пользователь закрыл модалку: операция завершится ошибкой."""
+        if not self._pw_visible or self._pw_busy:
+            return
+        with self._pw_lock:
+            request = self._pw_request
+            if request is not None:
+                request.password = None
+                request.event.set()
+                self._pw_request = None
+        self._sudoPasswordDone.emit()
+
+    def _sudo_password_check_worker(self, password: str, remember: bool) -> None:
+        ok, detail = check_sudo_password(password)
+        if not ok:
+            self._sudoPasswordError.emit(detail or "Неверный пароль sudo")
+            return
+        try:
+            if remember:
+                save_cached_password(password)
+            else:
+                forget_cached_password()
+        except Exception:  # noqa: BLE001 — кэш не должен ломать операцию
+            self._log.exception("Не удалось обновить сохранённый пароль sudo")
+        with self._pw_lock:
+            request = self._pw_request
+            if request is not None:
+                request.password = password
+                request.event.set()
+                self._pw_request = None
+        self._sudoPasswordDone.emit()
+
     @Slot()
     def forgetSudoPassword(self) -> None:
-        from core.sudo_helper import forget_cached_password
-
-        if forget_cached_password():
+        removed = forget_saved_password()
+        with self._pw_lock:
+            request = self._pw_request
+            if request is not None:
+                request.password = None
+                request.event.set()
+                self._pw_request = None
+        self._sudoPasswordDone.emit()
+        if removed:
             self._set_message("Сохранённый пароль sudo удалён", "success")
         else:
             self._set_message("Сохранённого пароля sudo нет", "info")
@@ -3575,3 +3742,11 @@ class Backend(QObject):
     @Slot()
     def shutdown(self) -> None:
         self._timer.stop()
+        clear_password_provider()
+        clear_session_password()
+        with self._pw_lock:
+            request = self._pw_request
+            if request is not None:
+                request.password = None
+                request.event.set()
+                self._pw_request = None

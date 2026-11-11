@@ -25,7 +25,8 @@
 ## Установщик и зависимости
 
 - Все привилегированные команды — от root: в приложении `core/sudo_helper.run_sudo`
-  (`sudo -A`), в `installer/install_zapret.sh` — `run_sudo` (`sudo -S` с паролем из установщика
+  (`sudo -S` с паролем из Qt-модалки; без провайдера — `sudo -A`), в
+  `installer/install_zapret.sh` — `run_sudo` (`sudo -S` с паролем из установщика
   либо обычный `sudo`, если `sudo -n true` работает).
 - Пароль администратора: в начале установки `prepare_sudo_credentials` проверяет
   `sudo -n true` (passwordless) и статус пароля (`passwd -S`: `P`/`NP`/`L`). При `NP`/`L`
@@ -62,12 +63,13 @@ python3 tools/validate_strategies.py --dry-run     # плейсхолдеры, �
 python3 tools/convert_flowseal_strategies.py --check
 python3 tools/check_bbdpi_convert.py               # конвертер BB DPI (ciadpi) → nfqws + dry-run
 python3 tools/check_github_fetch.py                # цепочка провайдеров core/github_fetch.py (без сети)
+python3 tools/check_sudo_password.py               # стенд пароля sudo (fake sudo, без root/сети)
 python3 tools/check_tgws.py                         # стенд движка TG WS Proxy (obfuscated2 + WS + мост, без сети)
 bash tools/check_installer_steamos.sh               # стенд установщика: unlock→install→lock, pip-фолбэк, vendor-бандл, пароль/права sudo
 bash tools/check_starter.sh                          # стенд starter.sh: стратегия по умолчанию, --filter-*=*, заглушки nft/nfqws (без root)
 bash -n tools/build_vendor.sh                       # синтаксис сборки prebuilt PySide6 (сеть нужна только при запуске)
 ruff check core qmlui tools main.py                # конфиг в pyproject.toml
-QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software python3 main.py --selftest  # дымовой тест QML-интерфейса (93 проверки)
+QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software python3 main.py --selftest  # дымовой тест QML-интерфейса (106 проверок)
 ```
 
 CI (`.github/workflows/ci.yml`) выполняет те же шаги: ставит PySide6 и прогоняет QML-самопроверку
@@ -100,7 +102,8 @@ CI (`.github/workflows/ci.yml`) выполняет те же шаги: став�
   `ZapretFileChecker.check_files`), экран `qml/pages/SystemCheckPage.qml` открывается с
   `qml/pages/InfoPage.qml`; при проблемах после старта показывается уведомление
   `systemCheckOverlay`. Ничего не устанавливается само: `Backend.repairSystem()` (кнопка
-  «Исправить») ставит зависимости, файлы и zapret через sudo-askpass.
+  «Исправить») ставит зависимости, файлы и zapret через sudo (в GUI пароль
+  спрашивает Qt-модалка).
 - GameFilter включается только после предупреждения `warningDialog` в
   `qml/pages/GameFilterPage.qml` (тексты Tk-версии про Steam Deck); выключение — сразу.
 - Служба: `/etc/systemd/system/zapret.service`, `Type=oneshot`, `RemainAfterExit=yes`,
@@ -159,9 +162,13 @@ CI (`.github/workflows/ci.yml`) выполняет те же шаги: став�
   для работы в сетях с блокировкой WS нужны свои `--cfproxy-domain`/`--cfproxy-worker-domain`
   (поля на экране прокси).
 
-- Все привилегированные команды — только через `core/sudo_helper.run_sudo` (`sudo -A` +
-  `core/askpass.py`). Пароль приложение не хранит, кроме явного кэша 0600
-  (`~/.cache/zapret_dpi_manager/sudo.cred`) по галочке «Запомнить».
+- Все привилегированные команды — только через `core/sudo_helper.run_sudo`. В
+  приложении пароль спрашивает Qt-модалка `qml/components/SudoPasswordDialog.qml`
+  (провайдер — `qmlui/backend.py`): пароль идёт sudo через stdin (`sudo -S`), живёт
+  только на одно привилегированное действие. Без галочки «Запомнить» следующее
+  действие спрашивает снова; с галочкой — файл 0600
+  `~/.cache/zapret_dpi_manager/sudo.cred` и вопросов больше нет. Без провайдера
+  (CLI) остаётся `sudo -A` + `core/askpass.py`; zenity в установщике не меняется.
 - Плейсхолдеры `{...}` в `config.txt` раскрывает `zapret/system/starter.sh`; набор
   поддерживаемых плейсхолдеров проверяет `tools/validate_strategies.py`.
 - Логи ошибок: `~/.local/state/zapret_dpi_manager/error.log` (0600, ротация).

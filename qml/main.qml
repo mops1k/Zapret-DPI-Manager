@@ -433,6 +433,11 @@ ApplicationWindow {
 
     // --- Статусная строка (общая для всех экранов) --------------------------
 
+    SudoPasswordDialog {
+        id: sudoPasswordDialog
+        parent: root.contentItem
+    }
+
     Snackbar {
         id: snackbar
         anchors.horizontalCenter: parent.horizontalCenter
