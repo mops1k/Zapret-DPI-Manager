@@ -77,6 +77,19 @@ class ZapretFileChecker:
             self.manager_dir / "tgws" / "obfuscated2.py",
             self.manager_dir / "tgws" / "ws.py",
 
+            # Базовые списки: их отсутствие — повреждение установки.
+            # Пользовательские *_user.txt необязательны: их нет в архиве обновления.
+            self.manager_dir / "files" / "lists" / "gw.txt",
+            self.manager_dir / "files" / "lists" / "ipset-all.txt",
+            self.manager_dir / "files" / "lists" / "ipset-exclude.txt",
+            self.manager_dir / "files" / "lists" / "ipset-telegram.txt",
+            self.manager_dir / "files" / "lists" / "ipset-warp.txt",
+            self.manager_dir / "files" / "lists" / "list-exclude.txt",
+            self.manager_dir / "files" / "lists" / "list-general.txt",
+            self.manager_dir / "files" / "lists" / "list-google.txt",
+            self.manager_dir / "files" / "lists" / "list-telegram.txt",
+            self.manager_dir / "files" / "lists" / "other.txt",
+
             # Файлы конфигурации (name_strategy.txt создаётся в рантайме — не обязателен)
             self.manager_dir / "utils" / "chosen_strategies.txt",
 
@@ -98,9 +111,11 @@ class ZapretFileChecker:
 
         # Минимальное количество файлов в папках (соответствует составу релиза;
         # завышенные пороги приводили к бесконечному «восстановлению»).
+        # files/lists: 10 базовых списков; *_user.txt — пользовательские данные,
+        # их нет в архиве обновления (ManagerUpdater.exclude_from_update).
         self.min_files_in_dir = {
             self.manager_dir / "files" / "bin": 9,
-            self.manager_dir / "files" / "lists": 15,
+            self.manager_dir / "files" / "lists": 10,
             self.manager_dir / "files" / "strategy": 22,
             self.manager_dir / "core": 20,
             self.manager_dir / "ico": 1,

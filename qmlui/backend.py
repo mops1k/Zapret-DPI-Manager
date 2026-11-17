@@ -3501,6 +3501,14 @@ class Backend(QObject):
         self.systemCheckLogChanged.emit()
         self._spawn(self._system_repair_worker)
 
+    @staticmethod
+    def _short_check_path(path: str) -> str:
+        """Путь внутри ~/Zapret_DPI_Manager без домашнего префикса."""
+        try:
+            return str(Path(path).relative_to(Path.home() / "Zapret_DPI_Manager"))
+        except ValueError:
+            return str(path)
+
     def _collect_system_problems(self, line) -> dict:
         """Только чтение: зависимости, установка zapret, целостность файлов."""
         line("Проверка зависимостей…")
@@ -3542,6 +3550,10 @@ class Backend(QObject):
                 line(f"Не удалось проверить файлы: {exc}")
             line(f"Отсутствуют файлы: {len(missing_files)}, "
                  f"каталоги: {len(missing_dirs)}")
+            for path in missing_files:
+                line(f"Нет файла: {self._short_check_path(path)}")
+            for path in missing_dirs:
+                line(f"Нет каталога или мало файлов: {self._short_check_path(path)}")
 
         problems: list[str] = []
         if missing_deps:
@@ -3549,9 +3561,11 @@ class Backend(QObject):
         if not installed:
             problems.append("Zapret не установлен: нет /opt/zapret или службы zapret.service")
         if missing_files or missing_dirs:
-            problems.append("Файлы менеджера повреждены: отсутствуют "
-                            f"файлы ({len(missing_files)}) "
-                            f"и каталоги ({len(missing_dirs)})")
+            listed = [self._short_check_path(p) for p in (missing_files + missing_dirs)]
+            shown = ", ".join(listed[:3])
+            if len(listed) > 3:
+                shown += f" и ещё {len(listed) - 3}"
+            problems.append(f"Файлы менеджера повреждены: {shown}")
 
         return {
             "checked": True,
