@@ -184,6 +184,16 @@ CI (`.github/workflows/ci.yml`) выполняет те же шаги: став�
   Версия стратегий — SHA коммита Flowseal в `utils/strategies_version.txt` (проверка через
   Atom-ленту коммитов, без лимита GitHub API); бэкапы перед записью — в
   `~/.cache/zapret_dpi_manager/`.
+- Источник движка nfqws — предсобранные статические сборки `ImMALWARE/zapret-linux-easy`
+  (`bins/<arch>/nfqws`): бандл `zapret/bins/` держим байт-в-байт равным им (проверено
+  17.11.2026 — v72.12 для x86/x86_64/arm/arm64). bol-van предсобранных linux-бинарников не
+  публикует, а его v72.13 движок не меняет (const/guard-правки, `init.d` и armv7-фикс), поэтому
+  подменять файлы своей сборкой нельзя: кнопка «Обновить движок» сравнивает sha с провайдером и
+  откатит её. Обновление движка = смена провайдера в `core/engine_updater.py` или свой
+  кросс-билд с синхронной сменой источника.
+- Снапшот `tools/flowseal_src/*.bat` и стратегии `files/strategy/General*` обновляются только
+  вместе: скопировать свежие `.bat` из апстрима Flowseal, затем
+  `tools/convert_flowseal_strategies.py --write` (иначе шаг CI `--check` расходится).
 - Стратегии из BB DPI (движок ciadpi, hufrea/byedpi): `core/bbdpi_convert.py` переводит
   строку ciadpi в аргументы nfqws, экран `qml/pages/BbdpiPage.qml` открывается
   из «Сменить стратегию» → «Стратегия из BB DPI». Результат проверяется `nfqws --dry-run`
